@@ -1,0 +1,28 @@
+# 🔒 Environment variables
+.env
+
+# 🧰 Node modules
+node_modules/
+
+# 🧾 Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+*.log
+
+# 🧠 OS/system files
+.DS_Store
+Thumbs.db
+
+# 🧱 Build artifacts
+dist/
+build/
+
+# 🧩 VS Code workspace
+.vscode/
+
+# 🚀 Dependency lock files (optional, keep one)
+package-lock.json
+yarn.lock
