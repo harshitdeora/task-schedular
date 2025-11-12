@@ -4,6 +4,8 @@ import cors from "cors";
 import morgan from "morgan";
 import connectDB from "./config/db.js";
 import dagRoutes from "./routes/dagRoutes.js";
+import { startScheduler } from "./scheduler/scheduler.js";
+
 
 dotenv.config();
 connectDB();
@@ -17,3 +19,4 @@ app.use("/api/dags", dagRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+startScheduler();
