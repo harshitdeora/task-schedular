@@ -50,13 +50,16 @@ const executeTask = async (taskData) => {
 // Infinite loop listening to queue
 (async function listen() {
   while (true) {
-  const tasks = await redis.lrange("queue:tasks", -1, -1); // get last task
-  if (tasks.length > 0) {
-    const taskData = JSON.parse(tasks[0]);
-    await executeTask(taskData);
-    await redis.rpop("queue:tasks"); // remove it after execution
-  }
-  await new Promise(res => setTimeout(res, 2000)); // wait 2 seconds before next poll
+    const task = await redis.rpop("queue:tasks");
+
+    if (task) {
+        const taskData = JSON.parse(task);
+        await executeTask(taskData);
+    }
+
+    // sleep for 1 second (polling)
+    await new Promise(resolve => setTimeout(resolve, 1000));
 }
+
 
 })();
