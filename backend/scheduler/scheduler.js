@@ -26,11 +26,14 @@ export const startScheduler = () => {
       // Push first node (no dependencies) into Redis
       const firstNodeId = order[0];
       const node = dag.graph.nodes.find(n => n.id === firstNodeId);
-      await redis.lpush("queue:tasks", JSON.stringify({
-        executionId: execution._id,
-        dagId: dag._id,
-        task: node
-      }));
+      await redis.lpush(
+  "queue:tasks",
+  JSON.stringify({
+    executionId: execution._id.toString(),
+    dagId: dag._id.toString(),
+    task: node
+  })
+);
 
       console.log(`📤 Enqueued first task for DAG "${dag.name}"`);
     }
