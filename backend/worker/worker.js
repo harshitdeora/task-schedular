@@ -15,6 +15,7 @@ import { Server as SocketIOServer } from "socket.io";
 import redis from "../utils/redisClient.js"; // your redis client (Upstash or ioredis)
 import Execution from "../models/Execution.js";
 import WorkerModel from "../models/Worker.js";
+import DAG from "../models/Dag.js";
 
 const SOCKET_PORT = process.env.WORKER_SOCKET_PORT || 7000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/taskScheduler";
@@ -52,22 +53,38 @@ mongoose
 const WORKER_ID = `worker-${os.hostname()}-${Math.floor(Math.random() * 10000)}`;
 console.log(`⚙️ Worker started: ${WORKER_ID}`);
 
+// Track current task count
+let currentTaskCount = 0;
+
 const heartbeat = async () => {
   try {
     const cpuLoad = os.loadavg ? os.loadavg()[0] : 0;
     const memoryMB = Math.round((os.totalmem() - os.freemem()) / 1024 / 1024);
+    
+    // Determine status based on activity
+    let status = "idle";
+    if (currentTaskCount > 0) {
+      status = "busy";
+    }
 
-    await WorkerModel.findOneAndUpdate(
+    const worker = await WorkerModel.findOneAndUpdate(
       { workerId: WORKER_ID },
       {
         workerId: WORKER_ID,
-        status: "active",
+        status: status,
         lastHeartbeat: new Date(),
         cpu: cpuLoad,
-        memory: memoryMB
+        memory: memoryMB,
+        tasksInProgress: currentTaskCount,
+        $setOnInsert: { startedAt: new Date() } // Only set on first insert
       },
       { upsert: true, new: true }
     );
+    
+    // If worker exists but doesn't have startedAt, set it
+    if (worker && !worker.startedAt) {
+      await WorkerModel.findByIdAndUpdate(worker._id, { startedAt: new Date() });
+    }
   } catch (err) {
     console.error("Heartbeat error:", err);
   }
@@ -97,6 +114,25 @@ const moveToDeadLetter = async (raw, reason = "") => {
   }
 };
 
+// Helper to update worker task counts
+const updateWorkerTaskCount = async (incrementCompleted = 0, incrementFailed = 0) => {
+  try {
+    const update = {};
+    if (incrementCompleted > 0) {
+      update.$inc = { tasksCompleted: incrementCompleted };
+    }
+    if (incrementFailed > 0) {
+      if (!update.$inc) update.$inc = {};
+      update.$inc.tasksFailed = incrementFailed;
+    }
+    if (Object.keys(update).length > 0) {
+      await WorkerModel.findOneAndUpdate({ workerId: WORKER_ID }, update);
+    }
+  } catch (err) {
+    console.error("Update worker task count error:", err);
+  }
+};
+
 // ---------------- Task executor ----------------
 /**
  * payload: { executionId, dagId, task: { id, type, name, config }, attempt? }
@@ -107,10 +143,21 @@ const executeTask = async (payload) => {
     return;
   }
 
-  const { executionId, task, attempt = 1 } = payload;
+  const { executionId, dagId, task, attempt = 1 } = payload;
   let execDoc = null;
+  let dagDoc = null;
 
-  try { execDoc = await Execution.findById(executionId); } catch (err) { console.error("Fetch Execution error:", err); }
+  // Increment task count
+  currentTaskCount++;
+
+  try { 
+    execDoc = await Execution.findById(executionId);
+    if (dagId) {
+      dagDoc = await DAG.findById(dagId);
+    }
+  } catch (err) { 
+    console.error("Fetch Execution/DAG error:", err); 
+  }
 
   // Emit started
   io.emit("task:update", { executionId, taskId: task.id, status: "started", name: task.name, attempt, timestamp: new Date() });
@@ -125,6 +172,9 @@ const executeTask = async (payload) => {
 
   const finalize = async (status, info = {}) => {
     try {
+      // Decrement task count
+      currentTaskCount = Math.max(0, currentTaskCount - 1);
+
       if (execDoc) {
         const t = execDoc.tasks.slice().reverse().find((x) => x.nodeId === task.id);
         if (t) {
@@ -140,9 +190,18 @@ const executeTask = async (payload) => {
         await execDoc.save();
       }
 
+      // Update worker task counts
+      if (status === "success") {
+        await updateWorkerTaskCount(1, 0);
+      } else if (status === "failed") {
+        await updateWorkerTaskCount(0, 1);
+      }
+
       io.emit("task:update", { executionId, taskId: task.id, status, name: task.name, attempt, timestamp: new Date(), ...info });
     } catch (err) {
       console.error("Finalize error:", err);
+      // Still decrement task count even on error
+      currentTaskCount = Math.max(0, currentTaskCount - 1);
     }
   };
 
@@ -176,8 +235,20 @@ const executeTask = async (payload) => {
   } catch (err) {
     console.warn(`Task "${task.name}" attempt ${attempt} failed:`, err.message ?? err);
 
-    const maxRetries = Number(task.config?.retries ?? 3);
-    const retryDelayMs = Number(task.config?.retryDelay ?? 2000);
+    // Get retry config from DAG level, fallback to task level, then defaults
+    let maxRetries = 3;
+    let retryDelayMs = 2000;
+
+    if (dagDoc && dagDoc.retryConfig) {
+      maxRetries = Number(dagDoc.retryConfig.maxRetries ?? 3);
+      retryDelayMs = Number(dagDoc.retryConfig.retryDelay ?? 2000);
+    } else if (task.config?.retries !== undefined) {
+      maxRetries = Number(task.config.retries);
+    }
+    
+    if (task.config?.retryDelay !== undefined) {
+      retryDelayMs = Number(task.config.retryDelay);
+    }
 
     if (attempt < maxRetries) {
       setTimeout(async () => {
@@ -185,9 +256,11 @@ const executeTask = async (payload) => {
         try {
           await redis.lpush(REDIS_QUEUE, JSON.stringify(requeue));
           io.emit("task:update", { executionId, taskId: task.id, status: "retry_scheduled", name: task.name, attempt: attempt + 1, retryInMs: retryDelayMs, timestamp: new Date() });
+          console.log(`🔄 Task "${task.name}" requeued for retry (attempt ${attempt + 1}/${maxRetries})`);
         } catch (pushErr) {
           console.error("Requeue failed:", pushErr);
           await moveToDeadLetter(requeue, "requeue_failed:" + String(pushErr));
+          await finalize("failed", { error: `Requeue failed: ${pushErr.message}` });
         }
       }, retryDelayMs);
 

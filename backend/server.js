@@ -9,8 +9,10 @@ import morgan from "morgan";
 
 import connectDB from "./config/db.js";
 import dagRoutes from "./routes/dagRoutes.js";
+import workerRoutes from "./routes/workerRoutes.js";
 import { startScheduler } from "./scheduler/scheduler.js";
 import { initSocket } from "./websocket/socketServer.js";
+import { startWorkerHealthMonitor } from "./services/workerHealthMonitor.js";
 
 const app = express();
 
@@ -21,6 +23,7 @@ app.use(morgan("dev"));
 
 // --- Routes ---
 app.use("/api/dags", dagRoutes);
+app.use("/api/workers", workerRoutes);
 
 // --- Create HTTP server and attach websockets ---
 const server = http.createServer(app);
@@ -33,6 +36,9 @@ initSocket(server);
 
     // start scheduler after DB is up (so it can read/write tasks)
     startScheduler();
+    
+    // start worker health monitor
+    startWorkerHealthMonitor();
 
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {

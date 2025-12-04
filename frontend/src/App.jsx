@@ -6,6 +6,7 @@ import DagList from "./pages/DagList";
 import DagBuilder from "./pages/DagBuilder";
 import ExecutionMonitor from "./pages/ExecutionMonitor";
 import ExecutionHistory from "./pages/ExecutionHistory";
+import WorkerManagement from "./pages/WorkerManagement";
 import Navbar from "./components/Navbar";
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/builder" element={<DagBuilder />} />
         <Route path="/monitor" element={<ExecutionMonitor />} />
         <Route path="/history" element={<ExecutionHistory />} />
+        <Route path="/workers" element={<WorkerManagement />} />
 
         {/* Fallback: redirect any unknown path to the builder (or change to /dags if you prefer) */}
         <Route path="*" element={<Navigate to="/builder" replace />} />

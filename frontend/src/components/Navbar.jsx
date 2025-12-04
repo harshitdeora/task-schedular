@@ -21,7 +21,8 @@ export default function Navbar() {
       <Link to="/dags" style={linkStyle}>DAGsBuilder</Link>
       <Link to="/builder" style={linkStyle}>Builder</Link>
       <Link to="/monitor" style={{ color: "white", marginRight: "1rem" }}>Monitor</Link>
-      <Link to="/history" style={{ color: "white" }}>History</Link>
+      <Link to="/history" style={{ color: "white", marginRight: "1rem" }}>History</Link>
+      <Link to="/workers" style={{ color: "white" }}>Workers</Link>
 
     </nav>
   );

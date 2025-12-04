@@ -22,6 +22,10 @@ const dagSchema = new mongoose.Schema({
     nodes: [nodeSchema],
     edges: [edgeSchema]
   },
+  retryConfig: {
+    maxRetries: { type: Number, default: 3 },
+    retryDelay: { type: Number, default: 2000 } // in milliseconds
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
