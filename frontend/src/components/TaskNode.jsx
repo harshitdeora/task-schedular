@@ -1,11 +1,33 @@
 import React from "react";
 import { Handle, Position } from "reactflow";
 
+const TYPE_COLORS = {
+  http: "#b3e5fc",
+  email: "#ffccbc",
+  database: "#c8e6c9",
+  script: "#fff9c4",
+  file: "#e1bee7",
+  webhook: "#b2dfdb",
+  delay: "#ffe082",
+  notification: "#f8bbd0",
+  transform: "#d1c4e9"
+};
+
+const TYPE_ICONS = {
+  http: "🌐",
+  email: "📧",
+  database: "🗄️",
+  script: "📜",
+  file: "📁",
+  webhook: "🔗",
+  delay: "⏱️",
+  notification: "🔔",
+  transform: "🔄"
+};
+
 export default function TaskNode({ data }) {
-  const bg =
-    data.type === "http" ? "#b3e5fc" :
-    data.type === "script" ? "#c8e6c9" :
-    "#ffe082";
+  const bg = TYPE_COLORS[data.type] || "#ffe082";
+  const icon = TYPE_ICONS[data.type] || "⚙️";
 
   // small handle style to make it easier to click
   const handleStyle = {
@@ -48,8 +70,11 @@ export default function TaskNode({ data }) {
         <div style={smallLabel}>in</div>
       </div>
 
-      <strong style={{ display: "block", marginBottom: 6 }}>{data.label}</strong>
+      <strong style={{ display: "block", marginBottom: 6 }}>{icon} {data.label}</strong>
       <div style={{ fontSize: "0.8em", color: "#555" }}>{data.type}</div>
+      <div style={{ fontSize: "0.7em", color: "#888", marginTop: "4px" }}>
+        Double-click to configure
+      </div>
 
       {/* bottom handle (outgoing) */}
       <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: -18 }}>

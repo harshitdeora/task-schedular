@@ -22,10 +22,24 @@ const dagSchema = new mongoose.Schema({
     nodes: [nodeSchema],
     edges: [edgeSchema]
   },
+  schedule: {
+    enabled: { type: Boolean, default: false },
+    type: { 
+      type: String, 
+      enum: ["cron", "interval", "manual", "once"], 
+      default: "manual" 
+    },
+    cronExpression: String, // e.g., "0 9 * * *" for daily at 9 AM
+    intervalSeconds: Number, // for interval type
+    timezone: { type: String, default: "UTC" },
+    startDate: Date,
+    endDate: Date
+  },
   retryConfig: {
     maxRetries: { type: Number, default: 3 },
     retryDelay: { type: Number, default: 2000 } // in milliseconds
   },
+  isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

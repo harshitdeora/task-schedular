@@ -26,7 +26,7 @@ export default function WorkerManagement() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5000); // Refresh every 5 seconds
+    const interval = setInterval(fetchData, 15000); // Refresh every 15 seconds
     return () => clearInterval(interval);
   }, []);
 
@@ -109,23 +109,14 @@ export default function WorkerManagement() {
   }
 
   return (
-    <div style={{ padding: "2rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" }}>
-        <h1>Worker Management Dashboard</h1>
-        <button
-          onClick={fetchData}
-          style={{
-            padding: "8px 16px",
-            backgroundColor: "#2196f3",
-            color: "white",
-            border: "none",
-            borderRadius: "4px",
-            cursor: "pointer"
-          }}
-        >
-          Refresh
-        </button>
-      </div>
+    <div className="section-padding">
+      <div className="container">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" }}>
+          <h1>Worker Management</h1>
+          <button onClick={fetchData} className="custom-btn">
+            Refresh
+          </button>
+        </div>
 
       {/* Stats Overview */}
       {stats && (
@@ -133,57 +124,41 @@ export default function WorkerManagement() {
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: "1rem",
+            gap: "20px",
             marginBottom: "2rem"
           }}
         >
-          <div style={{ padding: "1rem", backgroundColor: "#e3f2fd", borderRadius: "8px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#1976d2" }}>
-              {stats.totalWorkers}
-            </div>
-            <div style={{ color: "#666" }}>Total Workers</div>
+          <div className="card">
+            <h3 style={{ color: "var(--primary-color)", marginBottom: "10px" }}>Total Workers</h3>
+            <p style={{ fontSize: "32px", fontWeight: "bold", margin: 0 }}>{stats.totalWorkers}</p>
           </div>
-          <div style={{ padding: "1rem", backgroundColor: "#e8f5e9", borderRadius: "8px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#388e3c" }}>
-              {stats.activeWorkers}
-            </div>
-            <div style={{ color: "#666" }}>Active Workers</div>
+          <div className="card">
+            <h3 style={{ color: "var(--primary-color)", marginBottom: "10px" }}>Active Workers</h3>
+            <p style={{ fontSize: "32px", fontWeight: "bold", margin: 0 }}>{stats.activeWorkers}</p>
           </div>
-          <div style={{ padding: "1rem", backgroundColor: "#ffebee", borderRadius: "8px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#d32f2f" }}>
-              {stats.offlineWorkers}
-            </div>
-            <div style={{ color: "#666" }}>Offline Workers</div>
+          <div className="card">
+            <h3 style={{ color: "var(--primary-color)", marginBottom: "10px" }}>Offline Workers</h3>
+            <p style={{ fontSize: "32px", fontWeight: "bold", margin: 0 }}>{stats.offlineWorkers}</p>
           </div>
-          <div style={{ padding: "1rem", backgroundColor: "#fff3e0", borderRadius: "8px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#f57c00" }}>
-              {stats.totalTasksInProgress}
-            </div>
-            <div style={{ color: "#666" }}>Tasks In Progress</div>
+          <div className="card">
+            <h3 style={{ color: "var(--primary-color)", marginBottom: "10px" }}>Tasks In Progress</h3>
+            <p style={{ fontSize: "32px", fontWeight: "bold", margin: 0 }}>{stats.totalTasksInProgress}</p>
           </div>
-          <div style={{ padding: "1rem", backgroundColor: "#e8f5e9", borderRadius: "8px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#388e3c" }}>
-              {stats.totalTasksCompleted}
-            </div>
-            <div style={{ color: "#666" }}>Tasks Completed</div>
+          <div className="card">
+            <h3 style={{ color: "var(--primary-color)", marginBottom: "10px" }}>Tasks Completed</h3>
+            <p style={{ fontSize: "32px", fontWeight: "bold", margin: 0 }}>{stats.totalTasksCompleted}</p>
           </div>
-          <div style={{ padding: "1rem", backgroundColor: "#ffebee", borderRadius: "8px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#d32f2f" }}>
-              {stats.totalTasksFailed}
-            </div>
-            <div style={{ color: "#666" }}>Tasks Failed</div>
+          <div className="card">
+            <h3 style={{ color: "var(--primary-color)", marginBottom: "10px" }}>Tasks Failed</h3>
+            <p style={{ fontSize: "32px", fontWeight: "bold", margin: 0 }}>{stats.totalTasksFailed}</p>
           </div>
-          <div style={{ padding: "1rem", backgroundColor: "#f3e5f5", borderRadius: "8px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#7b1fa2" }}>
-              {stats.avgCpu.toFixed(2)}
-            </div>
-            <div style={{ color: "#666" }}>Avg CPU Load</div>
+          <div className="card">
+            <h3 style={{ color: "var(--primary-color)", marginBottom: "10px" }}>Avg CPU Load</h3>
+            <p style={{ fontSize: "32px", fontWeight: "bold", margin: 0 }}>{stats.avgCpu.toFixed(2)}%</p>
           </div>
-          <div style={{ padding: "1rem", backgroundColor: "#e1f5fe", borderRadius: "8px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#0277bd" }}>
-              {formatMemory(stats.avgMemory)}
-            </div>
-            <div style={{ color: "#666" }}>Avg Memory</div>
+          <div className="card">
+            <h3 style={{ color: "var(--primary-color)", marginBottom: "10px" }}>Avg Memory</h3>
+            <p style={{ fontSize: "32px", fontWeight: "bold", margin: 0 }}>{formatMemory(stats.avgMemory)}</p>
           </div>
         </div>
       )}
@@ -191,28 +166,19 @@ export default function WorkerManagement() {
       {/* Worker List */}
       <h2 style={{ marginBottom: "1rem" }}>Workers</h2>
       {workers.length === 0 ? (
-        <div style={{ padding: "2rem", textAlign: "center", color: "#666" }}>
-          No workers found. Start a worker process to see it here.
+        <div className="card" style={{ textAlign: "center" }}>
+          <p>No workers found. Start a worker process to see it here.</p>
         </div>
       ) : (
         <div
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))",
-            gap: "1rem"
+            gap: "20px"
           }}
         >
           {workers.map((worker) => (
-            <div
-              key={worker._id || worker.workerId}
-              style={{
-                padding: "1.5rem",
-                border: "1px solid #ddd",
-                borderRadius: "8px",
-                backgroundColor: worker.status === "offline" ? "#fafafa" : "white",
-                boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
-              }}
-            >
+            <div key={worker._id || worker.workerId} className="card">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
                 <h3 style={{ margin: 0, fontSize: "18px" }}>{worker.workerId}</h3>
                 {getStatusBadge(worker.status)}
@@ -256,6 +222,7 @@ export default function WorkerManagement() {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

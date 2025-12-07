@@ -16,6 +16,7 @@ import redis from "../utils/redisClient.js"; // your redis client (Upstash or io
 import Execution from "../models/Execution.js";
 import WorkerModel from "../models/Worker.js";
 import DAG from "../models/Dag.js";
+import * as taskExecutors from "./taskExecutors.js";
 
 const SOCKET_PORT = process.env.WORKER_SOCKET_PORT || 7000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/taskScheduler";
@@ -187,6 +188,10 @@ const executeTask = async (payload) => {
             nodeId: task.id, name: task.name, status, attempts: attempt, startedAt: new Date(), completedAt: new Date(), error: info.error ?? null, output: info.output ?? null
           });
         }
+        
+        // Check if execution should be marked as complete
+        await checkAndUpdateExecutionStatus(execDoc, dagDoc);
+        
         await execDoc.save();
       }
 
@@ -205,33 +210,109 @@ const executeTask = async (payload) => {
     }
   };
 
+  // Helper function to check if execution is complete
+  const checkAndUpdateExecutionStatus = async (execDoc, dagDoc) => {
+    try {
+      // Only check if execution is still running
+      if (execDoc.status !== "running" && execDoc.status !== "queued") {
+        return;
+      }
+
+      // Get all tasks from DAG
+      const dagNodes = dagDoc ? dagDoc.graph?.nodes || [] : [];
+      const totalExpectedTasks = dagNodes.length;
+      const completedTasks = execDoc.tasks.filter(t => t.status === "success" || t.status === "failed").length;
+      const failedTasks = execDoc.tasks.filter(t => t.status === "failed").length;
+      const runningTasks = execDoc.tasks.filter(t => t.status === "running" || t.status === "started" || t.status === "retrying").length;
+
+      // If all expected tasks are completed
+      if (totalExpectedTasks > 0 && completedTasks >= totalExpectedTasks && runningTasks === 0) {
+        const finalStatus = failedTasks > 0 ? "failed" : "success";
+        execDoc.status = finalStatus;
+        if (!execDoc.timeline) execDoc.timeline = {};
+        if (!execDoc.timeline.completedAt) {
+          execDoc.timeline.completedAt = new Date();
+        }
+        console.log(`✅ Execution ${execDoc._id} completed with status: ${finalStatus}`);
+        
+        // Emit execution completion event
+        io.emit("execution:update", {
+          _id: execDoc._id,
+          status: finalStatus,
+          timeline: execDoc.timeline,
+          tasks: execDoc.tasks
+        });
+      } else if (execDoc.status === "queued" && execDoc.tasks.length > 0) {
+        // Mark as running when first task starts
+        execDoc.status = "running";
+        if (!execDoc.timeline) execDoc.timeline = {};
+        if (!execDoc.timeline.startedAt) {
+          execDoc.timeline.startedAt = new Date();
+        }
+        io.emit("execution:update", {
+          _id: execDoc._id,
+          status: "running",
+          timeline: execDoc.timeline
+        });
+      }
+    } catch (err) {
+      console.error("Error checking execution status:", err);
+    }
+  };
+
   try {
-    if (task.type === "http") {
-      const method = (task.config?.method ?? "get").toLowerCase();
-      const url = task.config?.url;
-      if (!url) throw new Error("HTTP task missing URL");
-      const axiosOptions = { method, url, headers: task.config?.headers || {}, timeout: (task.config?.timeoutSeconds || 30) * 1000 };
-      const response = await axios(axiosOptions);
-      await finalize("success", { output: { status: response.status, data: response.data } });
-      console.log(`✅ HTTP task "${task.name}" succeeded`);
-      return;
+    let result;
+
+    // Route to appropriate executor based on task type
+    switch (task.type) {
+      case "http":
+        result = await taskExecutors.executeHttpTask(task);
+        break;
+
+      case "email":
+        // Pass executionId to email task so it can get user SMTP settings
+        result = await taskExecutors.executeEmailTask({ ...task, executionId });
+        break;
+
+      case "database":
+      case "db":
+        result = await taskExecutors.executeDatabaseTask(task);
+        break;
+
+      case "script":
+        result = await taskExecutors.executeScriptTask(task);
+        break;
+
+      case "file":
+        result = await taskExecutors.executeFileTask(task);
+        break;
+
+      case "webhook":
+        result = await taskExecutors.executeWebhookTask(task);
+        break;
+
+      case "delay":
+      case "wait":
+        result = await taskExecutors.executeDelayTask(task);
+        break;
+
+      case "notification":
+      case "notify":
+        result = await taskExecutors.executeNotificationTask(task);
+        break;
+
+      case "transform":
+      case "data":
+        result = await taskExecutors.executeTransformTask(task);
+        break;
+
+      default:
+        throw new Error(`Unsupported task type: ${task.type}`);
     }
 
-    if (task.type === "script") {
-      const simulated = `Simulated script: ${task.config?.script ?? "<no-script>"}`;
-      await finalize("success", { output: simulated });
-      console.log(`✅ Script task "${task.name}" simulated success`);
-      return;
-    }
-
-    if (task.type === "email") {
-      const simulated = { to: task.config?.to, subject: task.config?.subject, body: task.config?.body, note: "Email simulated" };
-      await finalize("success", { output: simulated });
-      console.log(`✅ Email task "${task.name}" simulated`);
-      return;
-    }
-
-    throw new Error(`Unsupported task type: ${task.type}`);
+    await finalize("success", { output: result });
+    console.log(`✅ ${task.type} task "${task.name}" succeeded`);
+    return;
   } catch (err) {
     console.warn(`Task "${task.name}" attempt ${attempt} failed:`, err.message ?? err);
 

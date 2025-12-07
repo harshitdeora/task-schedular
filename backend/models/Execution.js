@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const executionSchema = new mongoose.Schema({
   dagId: { type: mongoose.Schema.Types.ObjectId, ref: "DAG" },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // Track which user triggered this execution
   status: { type: String, enum: ["queued", "running", "success", "failed"], default: "queued" },
   tasks: [
     {
