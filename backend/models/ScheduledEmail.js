@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 
 const scheduledEmailSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // Optional - can be null for DAG-scheduled emails
+  executionId: { type: mongoose.Schema.Types.ObjectId, ref: "Execution" }, // Link to execution
+  taskNodeId: { type: String }, // Link to specific task node in execution
   userEmail: { type: String, required: true }, // Sender email
   recipient: { type: String, required: true }, // Recipient email
   subject: { type: String, required: true },

@@ -88,28 +88,31 @@ export async function executeEmailTask(task) {
         const Execution = (await import("../models/Execution.js")).default;
         const User = (await import("../models/User.js")).default;
         
-        // Try to get user from execution context if available
-        let userEmail = from || process.env.SMTP_USER || "noreply@example.com";
+        // Require user context so emails are always tied to the logged-in user
+        if (!task.executionId) {
+          throw new Error("Cannot schedule email without executionId/user context. Ensure the task is created by an authenticated user.");
+        }
+
+        let userEmail = null;
         let userId = null;
-        
-        // If task has execution context, try to get user email
-        if (task.executionId) {
-          try {
-            const execution = await Execution.findById(task.executionId);
-            if (execution && execution.userId) {
-              const user = await User.findById(execution.userId);
-              if (user) {
-                userId = user._id;
-                userEmail = user.email;
-              }
-            }
-          } catch (err) {
-            // Ignore - use defaults
+
+        const execution = await Execution.findById(task.executionId);
+        if (execution && execution.userId) {
+          const user = await User.findById(execution.userId);
+          if (user) {
+            userId = user._id;
+            userEmail = user.email;
           }
         }
-        
-        await ScheduledEmail.create({
+
+        if (!userId || !userEmail) {
+          throw new Error("User SMTP settings required. Please save SMTP settings in Settings before scheduling emails.");
+        }
+
+        const scheduledEmail = await ScheduledEmail.create({
           userId: userId, // Set userId if available from execution
+          executionId: task.executionId || null, // Link to execution
+          taskNodeId: task.id || null, // Link to task node
           userEmail: userEmail,
           recipient: to,
           subject,
@@ -120,10 +123,13 @@ export async function executeEmailTask(task) {
         });
 
         console.log(`📅 Email scheduled for ${scheduledDate.toLocaleString()}. Will be sent automatically.`);
+        // Return special status to indicate task is scheduled, not completed
         return {
           scheduled: true,
           scheduledDateTime: scheduledDate,
-          message: `Email scheduled for ${scheduledDate.toLocaleString()}`
+          scheduledEmailId: scheduledEmail._id.toString(),
+          message: `Email scheduled for ${scheduledDate.toLocaleString()}`,
+          taskStatus: "scheduled" // Special status to indicate task is waiting
         };
       } catch (error) {
         console.error("Failed to schedule email:", error.message);
@@ -135,26 +141,58 @@ export async function executeEmailTask(task) {
   // Send email immediately
   try {
     const nodemailer = (await import("nodemailer")).default;
-    
-    // Get SMTP config from task config or environment variables
-    const smtpConfig = smtp || {
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT) || 587,
-      secure: process.env.SMTP_SECURE === "true" || false,
-      user: process.env.SMTP_USER,
-      password: process.env.SMTP_PASSWORD
-    };
+    const { decrypt } = await import("../utils/encryption.js");
+    const Execution = (await import("../models/Execution.js")).default;
+    const User = (await import("../models/User.js")).default;
 
-    // Validate SMTP configuration with detailed error
-    if (!smtpConfig.host || !smtpConfig.user || !smtpConfig.password) {
-      const missing = [];
-      if (!smtpConfig.host) missing.push("SMTP_HOST");
-      if (!smtpConfig.user) missing.push("SMTP_USER");
-      if (!smtpConfig.password) missing.push("SMTP_PASSWORD");
-      throw new Error(`SMTP configuration incomplete. Missing: ${missing.join(", ")}. Please add to backend/.env file and restart worker.`);
+    // Resolve user from execution; this enforces per-user SMTP
+    let user = null;
+    if (task.executionId) {
+      try {
+        const execution = await Execution.findById(task.executionId);
+        if (execution && execution.userId) {
+          user = await User.findById(execution.userId);
+          if (!user) {
+            console.error(`❌ User not found for userId: ${execution.userId}`);
+          }
+        } else {
+          console.error(`❌ Execution ${task.executionId} missing userId`);
+        }
+      } catch (err) {
+        console.error(`❌ Error fetching execution/user:`, err);
+      }
+    } else {
+      console.error(`❌ Email task missing executionId`);
     }
 
-    console.log(`📧 SMTP Config: ${smtpConfig.host}:${smtpConfig.port} (user: ${smtpConfig.user})`);
+    if (!user) {
+      throw new Error("Email sending requires authenticated user context. Please ensure you're logged in and the execution has a userId.");
+    }
+
+    // Use the user's saved SMTP settings only (no global fallback)
+    const settings = user.smtpSettings || {};
+    if (!settings.password) {
+      throw new Error("SMTP password is missing. Please configure your SMTP settings in Settings page.");
+    }
+    
+    const decryptedPassword = decrypt(settings.password);
+    if (!decryptedPassword) {
+      throw new Error("Failed to decrypt SMTP password. Please update your SMTP settings in Settings page.");
+    }
+    
+    if (!settings.host || !settings.user) {
+      throw new Error(`SMTP settings incomplete. Missing: ${!settings.host ? 'host' : ''} ${!settings.user ? 'username' : ''}. Please configure in Settings page.`);
+    }
+
+    const smtpConfig = {
+      host: settings.host,
+      port: settings.port || 587,
+      secure: settings.secure || false,
+      user: settings.user,
+      password: decryptedPassword
+    };
+
+    console.log(`📧 SMTP Config (user-scoped): ${smtpConfig.host}:${smtpConfig.port} (user: ${smtpConfig.user})`);
 
     const transporter = nodemailer.createTransport({
       host: smtpConfig.host,

@@ -5,9 +5,7 @@ import axios from "axios";
 import Dashboard from "./pages/Dashboard";
 import DagList from "./pages/DagList";
 import DagBuilder from "./pages/DagBuilder";
-import ExecutionMonitor from "./pages/ExecutionMonitor";
 import ExecutionHistory from "./pages/ExecutionHistory";
-import WorkerManagement from "./pages/WorkerManagement";
 import UserSettings from "./pages/UserSettings";
 import Navbar from "./components/Navbar";
 import Login from "./components/Login";
@@ -19,8 +17,19 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is authenticated
+    // Check if user is authenticated on mount and when window gains focus
+    // This ensures we get the latest user data after login
     checkAuth();
+    
+    // Also check auth when window regains focus (in case user logged in another tab)
+    const handleFocus = () => {
+      checkAuth();
+    };
+    window.addEventListener('focus', handleFocus);
+    
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   const checkAuth = async () => {
@@ -42,9 +51,13 @@ export default function App() {
     try {
       await axios.post(`${API_URL}/api/auth/logout`, {}, { withCredentials: true });
       setUser(null);
-      window.location.href = "/";
+      // Clear any cached data and force full page reload
+      window.location.href = "/login";
     } catch (error) {
       console.error("Logout error:", error);
+      // Even if logout fails, clear user state and redirect
+      setUser(null);
+      window.location.href = "/login";
     }
   };
 
@@ -97,26 +110,10 @@ export default function App() {
           } 
         />
         <Route 
-          path="/monitor" 
-          element={
-            <ProtectedRoute>
-              <ExecutionMonitor />
-            </ProtectedRoute>
-          } 
-        />
-        <Route 
           path="/history" 
           element={
             <ProtectedRoute>
               <ExecutionHistory />
-            </ProtectedRoute>
-          } 
-        />
-        <Route 
-          path="/workers" 
-          element={
-            <ProtectedRoute>
-              <WorkerManagement />
             </ProtectedRoute>
           } 
         />

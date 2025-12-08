@@ -144,7 +144,7 @@ const executeTask = async (payload) => {
     return;
   }
 
-  const { executionId, dagId, task, attempt = 1 } = payload;
+  const { executionId, dagId, task, attempt = 1, userId } = payload;
   let execDoc = null;
   let dagDoc = null;
 
@@ -166,7 +166,20 @@ const executeTask = async (payload) => {
   // Append running record (best-effort)
   try {
     if (execDoc) {
-      execDoc.tasks.push({ nodeId: task.id, name: task.name, status: "running", attempts: attempt, startedAt: new Date() });
+      const taskStartTime = new Date();
+      execDoc.tasks.push({ nodeId: task.id, name: task.name, status: "running", attempts: attempt, startedAt: taskStartTime });
+      
+      // Ensure execution timeline.startedAt is set when first task starts
+      if (!execDoc.timeline) execDoc.timeline = {};
+      if (!execDoc.timeline.startedAt) {
+        execDoc.timeline.startedAt = taskStartTime;
+      }
+      
+      // Mark execution as running if still queued
+      if (execDoc.status === "queued") {
+        execDoc.status = "running";
+      }
+      
       await execDoc.save();
     }
   } catch (err) { console.warn("Append running record error:", err); }
@@ -177,22 +190,70 @@ const executeTask = async (payload) => {
       currentTaskCount = Math.max(0, currentTaskCount - 1);
 
       if (execDoc) {
+        // Find the task entry (look for the most recent one with matching nodeId)
         const t = execDoc.tasks.slice().reverse().find((x) => x.nodeId === task.id);
+        
+        // Check if this is a scheduled task (not yet completed)
+        // Also check if status itself is "scheduled" (passed directly)
+        const isScheduled = status === "scheduled" || (info.scheduled === true && info.taskStatus === "scheduled");
+        
         if (t) {
-          t.status = status;
-          t.completedAt = new Date();
-          if (status === "success") t.output = info.output ?? null;
-          if (status === "failed") t.error = info.error ?? String(info);
+          // If task is scheduled, mark as "scheduled" instead of "success"
+          if (isScheduled) {
+            t.status = "scheduled";
+            // Don't set completedAt for scheduled tasks
+          } else {
+            t.status = status;
+            t.completedAt = new Date();
+            if (status === "success") t.output = info.output ?? null;
+            if (status === "failed") t.error = info.error ?? String(info);
+          }
         } else {
-          execDoc.tasks.push({
-            nodeId: task.id, name: task.name, status, attempts: attempt, startedAt: new Date(), completedAt: new Date(), error: info.error ?? null, output: info.output ?? null
-          });
+          // Task not found, add new entry
+          if (isScheduled) {
+            execDoc.tasks.push({
+              nodeId: task.id, 
+              name: task.name, 
+              status: "scheduled", 
+              attempts: attempt, 
+              startedAt: new Date(), 
+              // Don't set completedAt for scheduled tasks
+              error: null, 
+              output: info.message || null
+            });
+          } else {
+            execDoc.tasks.push({
+              nodeId: task.id, 
+              name: task.name, 
+              status, 
+              attempts: attempt, 
+              startedAt: new Date(), 
+              completedAt: new Date(), 
+              error: info.error ?? null, 
+              output: info.output ?? null
+            });
+          }
         }
         
-        // Check if execution should be marked as complete
-        await checkAndUpdateExecutionStatus(execDoc, dagDoc);
-        
+        // Save the task update first
         await execDoc.save();
+        
+        // If task completed successfully (not scheduled), check for dependent tasks to enqueue
+        // Scheduled tasks will trigger dependent tasks when they actually complete (when email is sent)
+        if (status === "success" && !isScheduled && dagDoc && dagDoc.graph) {
+          await enqueueDependentTasks(task.id, execDoc, dagDoc);
+        }
+        
+        // Refetch execution from DB to get latest state (important for concurrent tasks)
+        // Use execDoc directly since we just saved it, but refresh to ensure we have latest from DB
+        const freshExecDoc = await Execution.findById(executionId);
+        if (freshExecDoc) {
+          // Check if execution should be marked as complete
+          await checkAndUpdateExecutionStatus(freshExecDoc, dagDoc);
+        } else {
+          // Fallback: use the execDoc we just saved
+          await checkAndUpdateExecutionStatus(execDoc, dagDoc);
+        }
       }
 
       // Update worker task counts
@@ -202,7 +263,9 @@ const executeTask = async (payload) => {
         await updateWorkerTaskCount(0, 1);
       }
 
-      io.emit("task:update", { executionId, taskId: task.id, status, name: task.name, attempt, timestamp: new Date(), ...info });
+      // Emit task update with correct status (use "scheduled" if task is scheduled, otherwise use the status)
+      const emitStatus = isScheduled ? "scheduled" : status;
+      io.emit("task:update", { executionId, taskId: task.id, status: emitStatus, name: task.name, attempt, timestamp: new Date(), ...info });
     } catch (err) {
       console.error("Finalize error:", err);
       // Still decrement task count even on error
@@ -210,10 +273,70 @@ const executeTask = async (payload) => {
     }
   };
 
+  // Helper function to enqueue dependent tasks after a task completes
+  const enqueueDependentTasks = async (completedTaskId, execDoc, dagDoc) => {
+    try {
+      if (!dagDoc || !dagDoc.graph || !dagDoc.graph.edges) {
+        return;
+      }
+
+      const edges = dagDoc.graph.edges;
+      const nodes = dagDoc.graph.nodes || [];
+      
+      // Get userId from execution document
+      const executionUserId = execDoc.userId ? execDoc.userId.toString() : null;
+      
+      // Find all tasks that depend on the completed task (edges where completed task is source)
+      const dependentTaskIds = edges
+        .filter(e => e.source === completedTaskId)
+        .map(e => e.target);
+
+      if (dependentTaskIds.length === 0) {
+        return; // No dependent tasks
+      }
+
+      // For each dependent task, check if all its dependencies are satisfied
+      for (const dependentTaskId of dependentTaskIds) {
+        // Find all dependencies of this task (edges where this task is target)
+        const dependencies = edges
+          .filter(e => e.target === dependentTaskId)
+          .map(e => e.source);
+
+        // Check if all dependencies have completed successfully
+        const completedDependencies = execDoc.tasks.filter(
+          t => dependencies.includes(t.nodeId) && t.status === "success"
+        );
+
+        // If all dependencies are satisfied, enqueue this task
+        if (dependencies.length > 0 && completedDependencies.length === dependencies.length) {
+          const dependentNode = nodes.find(n => n.id === dependentTaskId);
+          if (dependentNode) {
+            // Check if this task hasn't already been executed
+            const alreadyExecuted = execDoc.tasks.some(t => t.nodeId === dependentTaskId);
+            if (!alreadyExecuted) {
+              await redis.lpush(
+                REDIS_QUEUE,
+                JSON.stringify({
+                  executionId: execDoc._id.toString(),
+                  dagId: dagDoc._id.toString(),
+                  task: dependentNode,
+                  userId: executionUserId
+                })
+              );
+              console.log(`📤 Enqueued dependent task: ${dependentNode.name || dependentTaskId} (depends on: ${completedTaskId})`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error enqueueing dependent tasks:", err);
+    }
+  };
+
   // Helper function to check if execution is complete
   const checkAndUpdateExecutionStatus = async (execDoc, dagDoc) => {
     try {
-      // Only check if execution is still running
+      // Only check if execution is still queued or running
       if (execDoc.status !== "running" && execDoc.status !== "queued") {
         return;
       }
@@ -221,23 +344,90 @@ const executeTask = async (payload) => {
       // Get all tasks from DAG
       const dagNodes = dagDoc ? dagDoc.graph?.nodes || [] : [];
       const totalExpectedTasks = dagNodes.length;
-      const completedTasks = execDoc.tasks.filter(t => t.status === "success" || t.status === "failed").length;
-      const failedTasks = execDoc.tasks.filter(t => t.status === "failed").length;
-      const runningTasks = execDoc.tasks.filter(t => t.status === "running" || t.status === "started" || t.status === "retrying").length;
+      
+      if (totalExpectedTasks === 0) {
+        console.warn(`⚠️ DAG has no nodes for execution ${execDoc._id}`);
+        // If DAG has no nodes, mark as failed (invalid DAG)
+        execDoc.status = "failed";
+        if (!execDoc.timeline) execDoc.timeline = {};
+        execDoc.timeline.completedAt = new Date();
+        await execDoc.save();
+        return;
+      }
 
-      // If all expected tasks are completed
-      if (totalExpectedTasks > 0 && completedTasks >= totalExpectedTasks && runningTasks === 0) {
-        const finalStatus = failedTasks > 0 ? "failed" : "success";
+      // Get unique task IDs from execution (to avoid counting duplicates)
+      const uniqueTaskIds = new Set(execDoc.tasks.map(t => t.nodeId));
+      const completedTaskIds = new Set(
+        execDoc.tasks
+          .filter(t => t.status === "success" || t.status === "failed")
+          .map(t => t.nodeId)
+      );
+      const failedTaskIds = new Set(
+        execDoc.tasks
+          .filter(t => t.status === "failed")
+          .map(t => t.nodeId)
+      );
+      const runningTaskIds = new Set(
+        execDoc.tasks
+          .filter(t => t.status === "running" || t.status === "started" || t.status === "retrying")
+          .map(t => t.nodeId)
+      );
+      const scheduledTaskIds = new Set(
+        execDoc.tasks
+          .filter(t => t.status === "scheduled")
+          .map(t => t.nodeId)
+      );
+
+      const completedCount = completedTaskIds.size;
+      const failedCount = failedTaskIds.size;
+      const runningCount = runningTaskIds.size;
+      const scheduledCount = scheduledTaskIds.size;
+
+      console.log(`📊 Execution ${execDoc._id} status check: ${completedCount}/${totalExpectedTasks} completed, ${runningCount} running, ${scheduledCount} scheduled, ${failedCount} failed`);
+      
+      // IMPORTANT: If there are scheduled tasks, execution must NOT complete until they're sent
+      if (scheduledCount > 0) {
+        console.log(`⏳ Execution ${execDoc._id} has ${scheduledCount} scheduled task(s). Waiting for them to complete before marking execution as done.`);
+        return; // Don't mark as complete if there are scheduled tasks
+      }
+
+      // CRITICAL: Only mark as success/failed when ALL tasks are completed
+      // Must have exactly totalExpectedTasks completed, with no running or scheduled tasks
+      if (completedCount === totalExpectedTasks && runningCount === 0 && scheduledCount === 0) {
+        const finalStatus = failedCount > 0 ? "failed" : "success";
         execDoc.status = finalStatus;
         if (!execDoc.timeline) execDoc.timeline = {};
+        
+        // Ensure startedAt is set - use earliest task start time or queuedAt as fallback
+        if (!execDoc.timeline.startedAt) {
+          if (execDoc.tasks.length > 0) {
+            const firstTask = execDoc.tasks
+              .filter(t => t.startedAt)
+              .sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt))[0];
+            if (firstTask && firstTask.startedAt) {
+              execDoc.timeline.startedAt = firstTask.startedAt;
+            } else {
+              // Fallback to queuedAt if no task has startedAt
+              execDoc.timeline.startedAt = execDoc.timeline.queuedAt || new Date();
+            }
+          } else {
+            // No tasks, use queuedAt
+            execDoc.timeline.startedAt = execDoc.timeline.queuedAt || new Date();
+          }
+        }
+        
+        // Set completedAt
         if (!execDoc.timeline.completedAt) {
           execDoc.timeline.completedAt = new Date();
         }
-        console.log(`✅ Execution ${execDoc._id} completed with status: ${finalStatus}`);
+        
+        await execDoc.save();
+        
+        console.log(`✅ Execution ${execDoc._id} completed with status: ${finalStatus} (${completedCount}/${totalExpectedTasks} tasks completed)`);
         
         // Emit execution completion event
         io.emit("execution:update", {
-          _id: execDoc._id,
+          _id: execDoc._id.toString(),
           status: finalStatus,
           timeline: execDoc.timeline,
           tasks: execDoc.tasks
@@ -247,10 +437,20 @@ const executeTask = async (payload) => {
         execDoc.status = "running";
         if (!execDoc.timeline) execDoc.timeline = {};
         if (!execDoc.timeline.startedAt) {
-          execDoc.timeline.startedAt = new Date();
+          // Use the earliest task start time, or current time
+          const firstTask = execDoc.tasks.find(t => t.startedAt);
+          if (firstTask && firstTask.startedAt) {
+            execDoc.timeline.startedAt = firstTask.startedAt;
+          } else {
+            execDoc.timeline.startedAt = new Date();
+          }
         }
+        await execDoc.save();
+        
+        console.log(`▶️ Execution ${execDoc._id} started (status: running)`);
+        
         io.emit("execution:update", {
-          _id: execDoc._id,
+          _id: execDoc._id.toString(),
           status: "running",
           timeline: execDoc.timeline
         });
@@ -272,6 +472,19 @@ const executeTask = async (payload) => {
       case "email":
         // Pass executionId to email task so it can get user SMTP settings
         result = await taskExecutors.executeEmailTask({ ...task, executionId });
+        
+        // Check if email was scheduled (not sent immediately)
+        if (result && result.scheduled === true) {
+          // Mark task as scheduled, not success
+          await finalize("scheduled", {
+            scheduled: true,
+            taskStatus: "scheduled",
+            scheduledDateTime: result.scheduledDateTime,
+            message: result.message,
+            scheduledEmailId: result.scheduledEmailId
+          });
+          return; // Don't continue to finalize as success
+        }
         break;
 
       case "database":

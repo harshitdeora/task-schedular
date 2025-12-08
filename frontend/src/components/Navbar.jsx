@@ -70,19 +70,6 @@ export default function Navbar({ user, onLogout }) {
             Builder
           </Link>
           <Link 
-            to="/monitor" 
-            className={`nav-link ${location.pathname === "/monitor" ? "active" : ""}`}
-            style={{ 
-              color: location.pathname === "/monitor" ? "#13547a" : "#fff",
-              textDecoration: "none",
-              padding: "10px 15px",
-              borderRadius: "20px",
-              transition: "all 0.3s"
-            }}
-          >
-            Monitor
-          </Link>
-          <Link 
             to="/history" 
             className={`nav-link ${location.pathname === "/history" ? "active" : ""}`}
             style={{ 
@@ -94,19 +81,6 @@ export default function Navbar({ user, onLogout }) {
             }}
           >
             History
-          </Link>
-          <Link 
-            to="/workers" 
-            className={`nav-link ${location.pathname === "/workers" ? "active" : ""}`}
-            style={{ 
-              color: location.pathname === "/workers" ? "#13547a" : "#fff",
-              textDecoration: "none",
-              padding: "10px 15px",
-              borderRadius: "20px",
-              transition: "all 0.3s"
-            }}
-          >
-            Workers
           </Link>
           <Link 
             to="/settings" 

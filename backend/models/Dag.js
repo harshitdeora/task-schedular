@@ -16,8 +16,9 @@ const edgeSchema = new mongoose.Schema({
 });
 
 const dagSchema = new mongoose.Schema({
-  name: { type: String, required: true, unique: true },
+  name: { type: String, required: true },
   description: String,
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   graph: {
     nodes: [nodeSchema],
     edges: [edgeSchema]
@@ -43,5 +44,8 @@ const dagSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
+
+// Compound index to ensure unique DAG names per user
+dagSchema.index({ userId: 1, name: 1 }, { unique: true });
 
 export default mongoose.model("DAG", dagSchema);

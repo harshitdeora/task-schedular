@@ -60,27 +60,26 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// Login
+// Login (email-based)
 router.post("/login", async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { email, password } = req.body;
 
-    if (!username || !password) {
+    if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: "Username and password are required"
+        message: "Email and password are required"
       });
     }
 
-    // Find user by username or email
-    const user = await User.findOne({
-      $or: [{ username }, { email: username }]
-    });
+    // Find user by email only
+    const user = await User.findOne({ email });
 
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "Invalid credentials"
+        message: "User not found. Please register first.",
+        needsRegistration: true
       });
     }
 
@@ -89,23 +88,27 @@ router.post("/login", async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Invalid credentials"
+        message: "Invalid password"
       });
     }
 
-    // Login user
-    req.login(user, (err) => {
-      if (err) {
-        return res.status(500).json({ success: false, message: "Login failed" });
-      }
-      res.json({
-        success: true,
-        user: {
-          id: user._id,
-          username: user.username,
-          email: user.email,
-          name: user.name
+    // Logout any existing user first to clear previous session
+    req.logout(() => {
+      // After logout, login the new user
+      // This will create a fresh session for the new user
+      req.login(user, (err) => {
+        if (err) {
+          return res.status(500).json({ success: false, message: "Login failed" });
         }
+        res.json({
+          success: true,
+          user: {
+            id: user._id,
+            username: user.username,
+            email: user.email,
+            name: user.name
+          }
+        });
       });
     });
   } catch (error) {

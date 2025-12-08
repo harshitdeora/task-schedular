@@ -48,10 +48,10 @@ router.put("/smtp", requireAuth, async (req, res) => {
   try {
     const { host, port, secure, user: smtpUser, password } = req.body;
 
-    if (!host || !smtpUser || !password) {
+    if (!host || !smtpUser) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: host, user, password"
+        message: "Missing required fields: host and user"
       });
     }
 
@@ -60,8 +60,21 @@ router.put("/smtp", requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Encrypt password before storing
-    const encryptedPassword = encrypt(password);
+    // If password is provided, encrypt it. Otherwise, keep existing password if settings exist
+    let encryptedPassword = null;
+    if (password && password.trim() !== "") {
+      // New password provided
+      encryptedPassword = encrypt(password);
+    } else if (user.smtpSettings && user.smtpSettings.password) {
+      // No new password, but existing settings have password - keep it
+      encryptedPassword = user.smtpSettings.password;
+    } else {
+      // No password and no existing password - require it
+      return res.status(400).json({
+        success: false,
+        message: "Password is required for new SMTP settings"
+      });
+    }
 
     user.smtpSettings = {
       host,
@@ -108,7 +121,7 @@ router.delete("/smtp", requireAuth, async (req, res) => {
 
     res.json({
       success: true,
-      message: "SMTP settings removed. Will use default SMTP configuration."
+      message: "SMTP settings removed. Email sending will be disabled until you add SMTP again."
     });
   } catch (error) {
     console.error("Error deleting SMTP settings:", error);

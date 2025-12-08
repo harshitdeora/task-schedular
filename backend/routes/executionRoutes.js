@@ -5,13 +5,15 @@ import {
   createExecution,
   updateExecution,
   cancelExecution,
-  retryExecution
+  retryExecution,
+  deleteExecution,
+  deleteAllExecutions
 } from "../controllers/executionController.js";
 
 const router = express.Router();
 
-router.route("/").get(getExecutions).post(createExecution);
-router.route("/:id").get(getExecutionById).put(updateExecution);
+router.route("/").get(getExecutions).post(createExecution).delete(deleteAllExecutions);
+router.route("/:id").get(getExecutionById).put(updateExecution).delete(deleteExecution);
 router.post("/:id/cancel", cancelExecution);
 router.post("/:id/retry", retryExecution);
 

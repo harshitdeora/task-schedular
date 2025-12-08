@@ -130,12 +130,12 @@ export default function DagBuilder() {
     }
   };
 
-  const handleTaskTypeSelect = (type) => {
+  const handleTaskTypeSelect = useCallback((type) => {
     setSelectedTaskType(type);
-    setTaskNameInput("");
-  };
+    // Don't clear taskNameInput - preserve user's input
+  }, []);
 
-  const addNode = (type, customName = null) => {
+  const addNode = useCallback((type, customName = null) => {
     const id = uuidv4().slice(0, 8);
     const taskType = TASK_TYPES.find(t => t.value === type);
     const finalName = customName && customName.trim() 
@@ -154,15 +154,15 @@ export default function DagBuilder() {
 
     setSelectedTaskType(null);
     setTaskNameInput("");
-  };
+  }, []);
 
-  const handleAddTaskWithName = () => {
+  const handleAddTaskWithName = useCallback(() => {
     if (!selectedTaskType) {
       alert("Please select a task type first");
       return;
     }
     addNode(selectedTaskType, taskNameInput);
-  };
+  }, [selectedTaskType, taskNameInput, addNode]);
 
   const handleNodeDoubleClick = useCallback((event, node) => {
     event.stopPropagation();
@@ -395,7 +395,7 @@ export default function DagBuilder() {
                     fontWeight: "600"
                   }}
                 >
-                  ➕ Add Task: "{taskNameInput || TASK_TYPES.find(t => t.value === selectedTaskType)?.label}"
+                  ➕ Add Task: "{taskNameInput.trim() || TASK_TYPES.find(t => t.value === selectedTaskType)?.label || 'Unnamed Task'}"
                 </button>
               ) : (
                 <div style={{
@@ -432,14 +432,9 @@ export default function DagBuilder() {
                   <div
                     key={taskType.value}
                     onClick={() => {
-                      // If user has entered a name, select the type (they'll click Add button)
-                      // If no name, add immediately with default name
-                      if (taskNameInput.trim()) {
-                        handleTaskTypeSelect(taskType.value);
-                      } else {
-                        // Quick add with default name
-                        addNode(taskType.value);
-                      }
+                      // Always select the type first - user can then click "Add Task" button
+                      // This ensures task name is always used if provided
+                      handleTaskTypeSelect(taskType.value);
                     }}
                     style={{
                       padding: "15px",
@@ -518,13 +513,22 @@ export default function DagBuilder() {
             fitView
             onSelectionChange={onSelectionChange}
             defaultEdgeOptions={defaultEdgeOptions}
+            minZoom={0.1}
+            maxZoom={2}
+            deleteKeyCode={["Delete", "Backspace"]}
+            multiSelectionKeyCode={["Meta", "Control"]}
+            nodesDraggable
+            nodesConnectable
+            elementsSelectable
           >
             <Background gap={20} size={1} color="#e0e0e0" />
             <MiniMap 
               nodeColor={(node) => TASK_TYPES.find(t => t.value === node.data?.type)?.color || "#80d0c7"}
               style={{ background: "rgba(255,255,255,0.9)" }}
+              pannable
+              zoomable
             />
-            <Controls style={{ background: "rgba(255,255,255,0.9)" }} />
+            <Controls style={{ background: "rgba(255,255,255,0.9)" }} showInteractive={false} />
           </ReactFlow>
 
           {nodes.length === 0 && (

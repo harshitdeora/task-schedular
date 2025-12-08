@@ -42,15 +42,18 @@ export default function TaskConfigPanel({ node, onUpdate, onClose }) {
       return;
     }
 
-    onUpdate({
+    // Create updated node with all changes
+    const updatedNode = {
       ...node,
       data: {
         ...node.data,
-        label: taskName,
+        label: taskName.trim(), // Ensure trimmed name
         type: taskType,
-        config: config
+        config: { ...config } // Ensure config is properly spread
       }
-    });
+    };
+
+    onUpdate(updatedNode);
     onClose();
   };
 

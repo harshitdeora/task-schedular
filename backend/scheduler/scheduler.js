@@ -31,7 +31,7 @@ async function triggerDAGExecution(dag) {
 
     const execution = await Execution.create({
       dagId: dag._id,
-      userId: null, // Scheduled executions don't have userId
+      userId: dag.userId, // Use DAG owner's userId for scheduled executions
       status: "queued",
       timeline: { queuedAt: new Date() }
     });

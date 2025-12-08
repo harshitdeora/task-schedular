@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import ScheduledEmailManager from "../components/ScheduledEmailManager";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -15,54 +13,60 @@ export default function Dashboard({ user }) {
     successRate: 0
   });
   const [recentExecutions, setRecentExecutions] = useState([]);
-  const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Reset state when user changes
+    setStats({
+      totalDags: 0,
+      activeDags: 0,
+      runningTasks: 0,
+      totalWorkers: 0,
+      successRate: 0
+    });
+    setRecentExecutions([]);
+    setLoading(true);
+    
     fetchDashboardData();
     const interval = setInterval(fetchDashboardData, 10000); // Reduced to 10 seconds
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.id]); // Re-fetch when user changes
 
   const fetchDashboardData = async () => {
     try {
       const [dagsRes, executionsRes, workersRes] = await Promise.all([
-        axios.get(`${API_URL}/api/dags`),
-        axios.get(`${API_URL}/api/executions?limit=10`),
-        axios.get(`${API_URL}/api/workers`)
+        axios.get(`${API_URL}/api/dags`, { withCredentials: true }),
+        axios.get(`${API_URL}/api/executions?limit=10`, { withCredentials: true }),
+        axios.get(`${API_URL}/api/workers`, { withCredentials: true })
       ]);
 
       const dags = dagsRes.data || [];
       const executions = executionsRes.data || [];
       const workers = workersRes.data || [];
 
-      const runningExecutions = executions.filter(e => e.status === "running");
+      const runningExecutions = executions.filter(e => e.status === "running" || e.status === "queued");
       const successfulExecutions = executions.filter(e => e.status === "success");
       const successRate = executions.length > 0 
         ? (successfulExecutions.length / executions.length * 100).toFixed(1)
         : 0;
 
+      // Count DAGs that have active (running or queued) executions
+      const activeDagIds = new Set(
+        runningExecutions
+          .map(e => e.dagId?._id || e.dagId)
+          .filter(id => id !== null && id !== undefined)
+      );
+      const activeDagsCount = activeDagIds.size;
+
       setStats({
         totalDags: dags.length,
-        activeDags: dags.filter(d => !d.isDeleted).length,
+        activeDags: activeDagsCount,
         runningTasks: runningExecutions.length,
         totalWorkers: workers.length,
         successRate: parseFloat(successRate)
       });
 
       setRecentExecutions(executions.slice(0, 5));
-
-      // Prepare chart data (last 24 hours simulation)
-      const hours = Array.from({ length: 24 }, (_, i) => {
-        const hour = new Date();
-        hour.setHours(hour.getHours() - (23 - i));
-        return {
-          hour: hour.getHours() + ":00",
-          success: Math.floor(Math.random() * 10),
-          failed: Math.floor(Math.random() * 3)
-        };
-      });
-      setChartData(hours);
 
       setLoading(false);
     } catch (error) {
@@ -112,54 +116,6 @@ export default function Dashboard({ user }) {
           </div>
         </div>
 
-        {/* Charts Row */}
-        <div style={{ 
-          display: "grid", 
-          gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", 
-          gap: "20px",
-          marginBottom: "3rem"
-        }}>
-          <div className="card">
-            <h3 style={{ marginBottom: "20px" }}>Last 24 Hours</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="hour" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Line type="monotone" dataKey="success" stroke="#10b981" name="Success" />
-                <Line type="monotone" dataKey="failed" stroke="#ef4444" name="Failed" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="card">
-            <h3 style={{ marginBottom: "20px" }}>Status Distribution</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={[
-                    { name: "Success", value: stats.successRate },
-                    { name: "Failed", value: 100 - stats.successRate }
-                  ]}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  <Cell fill="#10b981" />
-                  <Cell fill="#ef4444" />
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
         {/* Recent Executions */}
         <div className="card">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
@@ -182,9 +138,26 @@ export default function Dashboard({ user }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {recentExecutions.map((exec) => (
+                  {recentExecutions.map((exec) => {
+                    // Handle different possible structures of dagId
+                    let dagName = "N/A";
+                    if (exec.dagId) {
+                      if (typeof exec.dagId === 'object') {
+                        if (exec.dagId.name) {
+                          // DAG exists and has a name
+                          dagName = exec.dagId.name;
+                        } else if (exec.dagId.deleted === true || exec.dagId._id) {
+                          // DAG was deleted (has _id but no name, or explicitly marked as deleted)
+                          dagName = "Deleted DAG";
+                        }
+                      } else if (typeof exec.dagId === 'string') {
+                        dagName = exec.dagId;
+                      }
+                    }
+                    
+                    return (
                     <tr key={exec._id}>
-                      <td>{exec.dagId?.name || "N/A"}</td>
+                      <td>{dagName}</td>
                       <td>
                         <span style={{
                           padding: "4px 12px",
@@ -196,14 +169,25 @@ export default function Dashboard({ user }) {
                           {exec.status}
                         </span>
                       </td>
-                      <td>{exec.timeline?.startedAt ? new Date(exec.timeline.startedAt).toLocaleString() : "N/A"}</td>
+                      <td>
+                        {exec.timeline?.startedAt 
+                          ? new Date(exec.timeline.startedAt).toLocaleString() 
+                          : exec.status === "queued" 
+                            ? "Queued..." 
+                            : "N/A"}
+                      </td>
                       <td>
                         {exec.timeline?.startedAt && exec.timeline?.completedAt
                           ? `${Math.round((new Date(exec.timeline.completedAt) - new Date(exec.timeline.startedAt)) / 1000)}s`
-                          : "Running"}
+                          : exec.status === "success" || exec.status === "failed"
+                            ? exec.timeline?.startedAt
+                              ? `${Math.round((new Date() - new Date(exec.timeline.startedAt)) / 1000)}s`
+                              : "N/A"
+                            : "Running..."}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -216,8 +200,6 @@ export default function Dashboard({ user }) {
           <Link to="/dags" className="custom-border-btn">View All DAGs</Link>
         </div>
 
-        {/* Scheduled Email Manager */}
-        {user && <ScheduledEmailManager user={user} />}
       </div>
     </div>
   );

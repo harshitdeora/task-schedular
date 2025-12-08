@@ -48,6 +48,11 @@ function hasCycle(nodes, edges) {
 
 export const createDAG = async (req, res) => {
   try {
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
     // Validate DAG structure
     if (req.body.graph) {
       const { nodes, edges } = req.body.graph;
@@ -56,7 +61,13 @@ export const createDAG = async (req, res) => {
       }
     }
     
-    const dag = await DAG.create(req.body);
+    // Set userId from authenticated user
+    const dagData = {
+      ...req.body,
+      userId: req.user._id
+    };
+    
+    const dag = await DAG.create(dagData);
     res.status(201).json({ success: true, dag });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
@@ -65,7 +76,13 @@ export const createDAG = async (req, res) => {
 
 export const getDAGs = async (req, res) => {
   try {
-    const dags = await DAG.find().sort({ createdAt: -1 });
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
+    // Only return DAGs belonging to the authenticated user
+    const dags = await DAG.find({ userId: req.user._id }).sort({ createdAt: -1 });
     res.json(dags);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -74,7 +91,12 @@ export const getDAGs = async (req, res) => {
 
 export const getDAGById = async (req, res) => {
   try {
-    const dag = await DAG.findById(req.params.id);
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
+    const dag = await DAG.findOne({ _id: req.params.id, userId: req.user._id });
     if (!dag) {
       return res.status(404).json({ success: false, message: "DAG not found" });
     }
@@ -86,6 +108,11 @@ export const getDAGById = async (req, res) => {
 
 export const updateDAG = async (req, res) => {
   try {
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
     // Validate DAG structure if graph is being updated
     if (req.body.graph) {
       const { nodes, edges } = req.body.graph;
@@ -94,9 +121,10 @@ export const updateDAG = async (req, res) => {
       }
     }
     
-    const dag = await DAG.findByIdAndUpdate(
-      req.params.id,
-      { ...req.body, updatedAt: new Date() },
+    // Ensure userId cannot be changed and DAG belongs to user
+    const dag = await DAG.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { ...req.body, userId: req.user._id, updatedAt: new Date() },
       { new: true, runValidators: true }
     );
     
@@ -112,7 +140,12 @@ export const updateDAG = async (req, res) => {
 
 export const deleteDAG = async (req, res) => {
   try {
-    const dag = await DAG.findByIdAndDelete(req.params.id);
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
+    const dag = await DAG.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
     if (!dag) {
       return res.status(404).json({ success: false, message: "DAG not found" });
     }
@@ -124,7 +157,12 @@ export const deleteDAG = async (req, res) => {
 
 export const validateDAG = async (req, res) => {
   try {
-    const dag = await DAG.findById(req.params.id);
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
+    const dag = await DAG.findOne({ _id: req.params.id, userId: req.user._id });
     if (!dag) {
       return res.status(404).json({ success: false, message: "DAG not found" });
     }
@@ -148,7 +186,12 @@ export const validateDAG = async (req, res) => {
 
 export const duplicateDAG = async (req, res) => {
   try {
-    const originalDag = await DAG.findById(req.params.id);
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
+    const originalDag = await DAG.findOne({ _id: req.params.id, userId: req.user._id });
     if (!originalDag) {
       return res.status(404).json({ success: false, message: "DAG not found" });
     }
@@ -156,6 +199,7 @@ export const duplicateDAG = async (req, res) => {
     const duplicatedDag = await DAG.create({
       ...originalDag.toObject(),
       _id: undefined,
+      userId: req.user._id, // Ensure duplicated DAG belongs to same user
       name: `${originalDag.name} (Copy)`,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -169,14 +213,20 @@ export const duplicateDAG = async (req, res) => {
 
 export const executeDAG = async (req, res) => {
   try {
-    const dag = await DAG.findById(req.params.id);
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
+    const dag = await DAG.findOne({ _id: req.params.id, userId: req.user._id });
     if (!dag) {
       return res.status(404).json({ success: false, message: "DAG not found" });
     }
     
-    // Create execution
+    // Create execution with userId
     const execution = await Execution.create({
       dagId: dag._id,
+      userId: req.user._id,
       status: "queued",
       timeline: { queuedAt: new Date() }
     });

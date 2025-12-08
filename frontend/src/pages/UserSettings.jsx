@@ -16,18 +16,42 @@ export default function UserSettings({ user }) {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
+    // Reset state when user changes
+    setSmtpSettings({
+      host: "",
+      port: 587,
+      secure: false,
+      user: user?.email || "",
+      password: ""
+    });
+    setHasExistingSettings(false);
+    setMessage("");
+    
     if (user) {
       fetchSmtpSettings();
     }
-  }, [user]);
+  }, [user?.id, user?.email]); // Re-run when user ID or email changes
 
   const fetchSmtpSettings = async () => {
+    if (!user || !user.id) {
+      // Reset if no user
+      setSmtpSettings({
+        host: "",
+        port: 587,
+        secure: false,
+        user: "",
+        password: ""
+      });
+      setHasExistingSettings(false);
+      return;
+    }
+    
     try {
       const response = await axios.get(`${API_URL}/api/user/smtp`, {
         withCredentials: true
       });
       if (response.data.success) {
-        const settings = response.data.smtpSettings;
+        const settings = response.data.smtpSettings || {};
         setSmtpSettings({
           host: settings.host || "",
           port: settings.port || 587,
@@ -35,10 +59,29 @@ export default function UserSettings({ user }) {
           user: settings.user || user?.email || "",
           password: "" // Don't show existing password
         });
-        setHasExistingSettings(settings.hasPassword);
+        setHasExistingSettings(!!settings.host && !!settings.user);
+      } else {
+        // No settings found, reset to defaults with current user's email
+        setSmtpSettings({
+          host: "",
+          port: 587,
+          secure: false,
+          user: user?.email || "",
+          password: ""
+        });
+        setHasExistingSettings(false);
       }
     } catch (error) {
       console.error("Error fetching SMTP settings:", error);
+      // On error, reset to defaults with current user's email
+      setSmtpSettings({
+        host: "",
+        port: 587,
+        secure: false,
+        user: user?.email || "",
+        password: ""
+      });
+      setHasExistingSettings(false);
     }
   };
 
@@ -48,9 +91,30 @@ export default function UserSettings({ user }) {
     setMessage("");
 
     try {
+      // If updating existing settings and password is empty, don't send password
+      const settingsToSend = { ...smtpSettings };
+      if (hasExistingSettings && (!settingsToSend.password || settingsToSend.password.trim() === "")) {
+        // Don't include password if updating and not provided
+        delete settingsToSend.password;
+      }
+
+      // Validate required fields
+      if (!settingsToSend.host || !settingsToSend.user) {
+        setMessage("❌ Host and Username are required");
+        setLoading(false);
+        return;
+      }
+
+      // If no existing settings, password is required
+      if (!hasExistingSettings && (!settingsToSend.password || settingsToSend.password.trim() === "")) {
+        setMessage("❌ Password is required for new SMTP settings");
+        setLoading(false);
+        return;
+      }
+
       const response = await axios.put(
         `${API_URL}/api/user/smtp`,
-        smtpSettings,
+        settingsToSend,
         { withCredentials: true }
       );
 
@@ -58,6 +122,8 @@ export default function UserSettings({ user }) {
         setMessage("✅ SMTP settings saved successfully!");
         setHasExistingSettings(true);
         setSmtpSettings({ ...smtpSettings, password: "" }); // Clear password field
+        // Refresh settings to get updated info
+        await fetchSmtpSettings();
       }
     } catch (error) {
       setMessage("❌ Failed to save: " + (error.response?.data?.message || error.message));
@@ -98,10 +164,26 @@ export default function UserSettings({ user }) {
         <h1 style={{ marginBottom: "2rem" }}>Email Settings</h1>
 
         <div className="card" style={{ marginBottom: "2rem" }}>
-          <h3 style={{ color: "#13547a", marginBottom: "15px" }}>📧 SMTP Configuration</h3>
+          <h3 style={{ color: "#13547a", marginBottom: "15px" }}>📧 SMTP Configuration (Optional)</h3>
+          <div style={{ 
+            padding: "15px", 
+            background: "#fff3cd", 
+            borderRadius: "8px", 
+            marginBottom: "20px",
+            border: "1px solid #ffc107"
+          }}>
+            <p style={{ color: "#856404", margin: 0, fontSize: "14px", fontWeight: "500" }}>
+              <strong>⚠️ Required for Email Tasks:</strong> You <strong>must</strong> configure SMTP settings to send emails.
+            </p>
+            <ul style={{ color: "#856404", margin: "10px 0 0 20px", fontSize: "13px", lineHeight: "1.6" }}>
+              <li><strong>Email tasks require:</strong> Your SMTP host, port, username, and app password</li>
+              <li><strong>Emails will be sent:</strong> From YOUR email address using YOUR SMTP credentials</li>
+              <li><strong>For Gmail:</strong> Use App Password (not your regular password) - see guide below</li>
+            </ul>
+          </div>
           <p style={{ color: "#666", marginBottom: "20px", fontSize: "14px" }}>
-            Configure your own SMTP settings to send emails from your email address. 
-            If not configured, the system will use default SMTP settings.
+            Configure your SMTP settings to enable email sending in your DAGs. 
+            <strong> This is required</strong> - email tasks will fail without SMTP configuration.
           </p>
 
           {message && (
@@ -202,7 +284,7 @@ export default function UserSettings({ user }) {
               </small>
             </div>
 
-            <div style={{ display: "flex", gap: "10px" }}>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button
                 type="submit"
                 disabled={loading}
@@ -218,9 +300,27 @@ export default function UserSettings({ user }) {
                   className="custom-border-btn"
                   style={{ padding: "12px 24px", borderColor: "#ef4444", color: "#ef4444" }}
                 >
-                  Remove Settings
+                  Remove Settings (Use Default)
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => {
+                  // Clear form and show that default will be used
+                  setSmtpSettings({
+                    host: "",
+                    port: 587,
+                    secure: false,
+                    user: user?.email || "",
+                    password: ""
+                  });
+                  setMessage("ℹ️ Form cleared. If you don't save settings, default SMTP from server will be used.");
+                }}
+                className="custom-border-btn"
+                style={{ padding: "12px 24px" }}
+              >
+                Clear Form
+              </button>
             </div>
           </form>
         </div>

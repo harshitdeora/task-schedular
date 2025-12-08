@@ -39,8 +39,10 @@ app.use(session({
   cookie: {
     secure: process.env.NODE_ENV === "production",
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    sameSite: 'lax' // Helps with cross-site requests
+  },
+  name: 'task-scheduler.sid' // Custom session name to avoid conflicts
 }));
 
 // Passport initialization (for session management)
