@@ -21,3 +21,15 @@ export function topologicalSort(nodes, edges) {
   }
   return order;
 }
+
+// Return all node ids with no incoming edges (graph roots)
+export function getStartNodes(nodes = [], edges = []) {
+  const incoming = {};
+  nodes.forEach(n => { incoming[n.id] = 0; });
+  edges.forEach(e => {
+    if (incoming[e.target] !== undefined) {
+      incoming[e.target] += 1;
+    }
+  });
+  return nodes.filter(n => (incoming[n.id] || 0) === 0).map(n => n.id);
+}

@@ -25,14 +25,7 @@ const defaultEdgeOptions = {
 
 const TASK_TYPES = [
   { value: "http", label: "HTTP Request", icon: "🌐", color: "#b3e5fc", description: "Call APIs" },
-  { value: "email", label: "Send Email", icon: "📧", color: "#ffccbc", description: "Send emails" },
-  { value: "database", label: "Database", icon: "🗄️", color: "#c8e6c9", description: "Query DB" },
-  { value: "script", label: "Script", icon: "📜", color: "#fff9c4", description: "Run code" },
-  { value: "file", label: "File", icon: "📁", color: "#e1bee7", description: "File ops" },
-  { value: "webhook", label: "Webhook", icon: "🔗", color: "#b2dfdb", description: "Webhooks" },
-  { value: "delay", label: "Delay", icon: "⏱️", color: "#ffe082", description: "Wait time" },
-  { value: "notification", label: "Notification", icon: "🔔", color: "#f8bbd0", description: "Alerts" },
-  { value: "transform", label: "Transform", icon: "🔄", color: "#d1c4e9", description: "Transform data" }
+  { value: "email", label: "Send Email", icon: "📧", color: "#ffccbc", description: "Send emails" }
 ];
 
 export default function DagBuilder() {

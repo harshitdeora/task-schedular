@@ -160,6 +160,36 @@ const executeTask = async (payload) => {
     console.error("Fetch Execution/DAG error:", err); 
   }
 
+  // Substitute variables in task config if userId is available
+  let processedTask = { ...task };
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/52c7123f-3f87-428e-aa6f-c92410677fb4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'worker.js:164',message:'processedTask initialized',data:{hasTask:!!task,hasUserId:!!userId,hasTaskConfig:!!task?.config},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+  // #endregion
+  if (userId && task.config) {
+    try {
+      const { substituteVariables } = await import("../utils/variableSubstitution.js");
+      const executionContext = {
+        executionId: executionId.toString(),
+        dagId: dagId?.toString(),
+        timestamp: new Date().toISOString()
+      };
+      
+      // Get previous task outputs for context
+      if (execDoc && execDoc.tasks) {
+        const completedTasks = execDoc.tasks.filter(t => t.status === "success");
+        completedTasks.forEach((t, idx) => {
+          executionContext[`task_${t.nodeId}_output`] = t.output;
+          executionContext[`task_${idx}_output`] = t.output;
+        });
+      }
+
+      processedTask.config = await substituteVariables(task.config, userId, executionContext);
+    } catch (err) {
+      console.warn("Variable substitution failed:", err.message);
+      // Continue with original task config
+    }
+  }
+
   // Emit started
   io.emit("task:update", { executionId, taskId: task.id, status: "started", name: task.name, attempt, timestamp: new Date() });
 
@@ -189,13 +219,14 @@ const executeTask = async (payload) => {
       // Decrement task count
       currentTaskCount = Math.max(0, currentTaskCount - 1);
 
+      // Check if this is a scheduled task (not yet completed)
+      // Also check if status itself is "scheduled" (passed directly)
+      // Define this outside the if block so it's available for emitStatus later
+      const isScheduled = status === "scheduled" || (info.scheduled === true && info.taskStatus === "scheduled");
+
       if (execDoc) {
         // Find the task entry (look for the most recent one with matching nodeId)
         const t = execDoc.tasks.slice().reverse().find((x) => x.nodeId === task.id);
-        
-        // Check if this is a scheduled task (not yet completed)
-        // Also check if status itself is "scheduled" (passed directly)
-        const isScheduled = status === "scheduled" || (info.scheduled === true && info.taskStatus === "scheduled");
         
         if (t) {
           // If task is scheduled, mark as "scheduled" instead of "success"
@@ -460,18 +491,25 @@ const executeTask = async (payload) => {
     }
   };
 
+  // Use processed task with substituted variables - define BEFORE try block
+  const taskToExecute = processedTask || task;
+
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/52c7123f-3f87-428e-aa6f-c92410677fb4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'worker.js:495',message:'taskToExecute defined',data:{hasProcessedTask:!!processedTask,hasTask:!!task,taskToExecuteType:taskToExecute?.type},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+
   try {
     let result;
 
     // Route to appropriate executor based on task type
-    switch (task.type) {
+    switch (taskToExecute.type) {
       case "http":
-        result = await taskExecutors.executeHttpTask(task);
+        result = await taskExecutors.executeHttpTask(taskToExecute);
         break;
 
       case "email":
         // Pass executionId to email task so it can get user SMTP settings
-        result = await taskExecutors.executeEmailTask({ ...task, executionId });
+        result = await taskExecutors.executeEmailTask({ ...taskToExecute, executionId });
         
         // Check if email was scheduled (not sent immediately)
         if (result && result.scheduled === true) {
@@ -489,45 +527,93 @@ const executeTask = async (payload) => {
 
       case "database":
       case "db":
-        result = await taskExecutors.executeDatabaseTask(task);
+        result = await taskExecutors.executeDatabaseTask(taskToExecute);
         break;
 
       case "script":
-        result = await taskExecutors.executeScriptTask(task);
+        // Get previous task output to pass as input to script
+        let previousTaskOutput = null;
+        if (execDoc && execDoc.tasks && execDoc.tasks.length > 0) {
+          // Find the most recent completed task (success or failed)
+          const completedTasks = execDoc.tasks
+            .filter(t => t.status === "success" || t.status === "failed")
+            .sort((a, b) => (b.completedAt || b.startedAt || 0) - (a.completedAt || a.startedAt || 0));
+          
+          if (completedTasks.length > 0) {
+            // Get the output from the most recent completed task
+            previousTaskOutput = completedTasks[0].output || null;
+          }
+        }
+        
+        // Pass previous task output as inputData to script
+        const scriptTaskWithInput = {
+          ...taskToExecute,
+          config: {
+            ...taskToExecute.config,
+            inputData: previousTaskOutput
+          }
+        };
+        
+        result = await taskExecutors.executeScriptTask(scriptTaskWithInput);
         break;
 
       case "file":
-        result = await taskExecutors.executeFileTask(task);
+        result = await taskExecutors.executeFileTask(taskToExecute);
         break;
 
       case "webhook":
-        result = await taskExecutors.executeWebhookTask(task);
+        result = await taskExecutors.executeWebhookTask(taskToExecute);
         break;
 
       case "delay":
       case "wait":
-        result = await taskExecutors.executeDelayTask(task);
+        result = await taskExecutors.executeDelayTask(taskToExecute);
         break;
 
       case "notification":
       case "notify":
-        result = await taskExecutors.executeNotificationTask(task);
+        result = await taskExecutors.executeNotificationTask(taskToExecute);
         break;
 
       case "transform":
       case "data":
-        result = await taskExecutors.executeTransformTask(task);
+        result = await taskExecutors.executeTransformTask(taskToExecute);
+        break;
+
+      case "condition":
+      case "if":
+        result = await taskExecutors.executeConditionTask(taskToExecute);
         break;
 
       default:
-        throw new Error(`Unsupported task type: ${task.type}`);
+        throw new Error(`Unsupported task type: ${taskToExecute?.type || task?.type || 'unknown'}`);
     }
 
     await finalize("success", { output: result });
-    console.log(`✅ ${task.type} task "${task.name}" succeeded`);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/52c7123f-3f87-428e-aa6f-c92410677fb4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'worker.js:586',message:'task succeeded',data:{taskToExecuteDefined:typeof taskToExecute!=='undefined',taskName:taskToExecute?.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    console.log(`✅ ${taskToExecute.type} task "${taskToExecute.name}" succeeded`);
     return;
   } catch (err) {
-    console.warn(`Task "${task.name}" attempt ${attempt} failed:`, err.message ?? err);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/52c7123f-3f87-428e-aa6f-c92410677fb4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'worker.js:589',message:'catch block entered',data:{taskToExecuteDefined:typeof taskToExecute!=='undefined',processedTaskDefined:typeof processedTask!=='undefined',taskDefined:typeof task!=='undefined',errorMessage:err?.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+    const taskName = taskToExecute?.name || task?.name || 'unknown';
+    
+    // For HTTP tasks, try to parse error response if it's JSON
+    let errorMessage = err.message ?? String(err);
+    let errorData = null;
+    if (taskToExecute?.type === "http" && errorMessage.startsWith("{")) {
+      try {
+        errorData = JSON.parse(errorMessage);
+        errorMessage = errorData.error || errorMessage;
+      } catch {
+        // Not JSON, use original message
+      }
+    }
+    
+    console.warn(`Task "${taskName}" attempt ${attempt} failed:`, errorMessage);
 
     // Get retry config from DAG level, fallback to task level, then defaults
     let maxRetries = 3;
@@ -536,12 +622,17 @@ const executeTask = async (payload) => {
     if (dagDoc && dagDoc.retryConfig) {
       maxRetries = Number(dagDoc.retryConfig.maxRetries ?? 3);
       retryDelayMs = Number(dagDoc.retryConfig.retryDelay ?? 2000);
-    } else if (task.config?.retries !== undefined) {
-      maxRetries = Number(task.config.retries);
     }
     
-    if (task.config?.retryDelay !== undefined) {
-      retryDelayMs = Number(task.config.retryDelay);
+    // Check task-level retry config (supports both retries and retryCount for HTTP tasks)
+    if (taskToExecute.config?.retries !== undefined) {
+      maxRetries = Number(taskToExecute.config.retries);
+    } else if (taskToExecute.config?.retryCount !== undefined) {
+      maxRetries = Number(taskToExecute.config.retryCount);
+    }
+    
+    if (taskToExecute.config?.retryDelay !== undefined) {
+      retryDelayMs = Number(taskToExecute.config.retryDelay);
     }
 
     if (attempt < maxRetries) {
@@ -558,11 +649,15 @@ const executeTask = async (payload) => {
         }
       }, retryDelayMs);
 
-      await finalize("retrying", { error: err.message });
+      // Include error data for HTTP tasks if available
+      const errorInfo = errorData || { error: errorMessage };
+      await finalize("retrying", errorInfo);
     } else {
-      await moveToDeadLetter(payload, "max_retries_exceeded:" + String(err.message));
-      await finalize("failed", { error: String(err.message) });
-      console.error(`❌ Task "${task.name}" permanently failed after ${attempt} attempts`);
+      await moveToDeadLetter(payload, "max_retries_exceeded:" + String(errorMessage));
+      // Include full error data for HTTP tasks (status code, response, etc.)
+      const finalErrorInfo = errorData || { error: errorMessage };
+      await finalize("failed", finalErrorInfo);
+      console.error(`❌ Task "${taskName}" permanently failed after ${attempt} attempts`);
     }
   }
 };

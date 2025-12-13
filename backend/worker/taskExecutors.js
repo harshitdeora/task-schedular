@@ -5,20 +5,27 @@ import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import mongoose from "mongoose";
+import { substituteVariables } from "../utils/variableSubstitution.js";
 
 const execAsync = promisify(exec);
 
 /**
  * HTTP Task Executor
- * Supports GET, POST, PUT, DELETE, PATCH with custom headers, auth, and body
+ * Production-grade HTTP request executor with security, query params, and comprehensive response handling
+ * Supports GET, POST, PUT, DELETE, PATCH with custom headers, auth, body, and query parameters
  */
 export async function executeHttpTask(task) {
+  const startTime = Date.now();
+  
   const {
     url,
     method = "GET",
     headers = {},
+    queryParams = {},
     body,
     auth,
+    timeout = 30000,
+    timeoutMs = 30000,
     timeoutSeconds = 30
   } = task.config || {};
 
@@ -26,14 +33,76 @@ export async function executeHttpTask(task) {
     throw new Error("HTTP task requires 'url' in config");
   }
 
+  // Validate URL is a string and trim whitespace
+  const urlString = String(url).trim();
+  if (!urlString) {
+    throw new Error("HTTP task requires a non-empty 'url' in config");
+  }
+
+  // Security: SSRF Protection - Block internal/private IP ranges
+  try {
+    // First, validate that URL starts with http:// or https://
+    const lowerUrl = urlString.toLowerCase();
+    if (!lowerUrl.startsWith("http://") && !lowerUrl.startsWith("https://")) {
+      throw new Error(`SSRF Protection: URL must start with http:// or https://. Got: ${urlString.substring(0, 50)}`);
+    }
+
+    const urlObj = new URL(urlString);
+    const hostname = urlObj.hostname;
+    
+    // Validate protocol after parsing
+    if (!["http:", "https:"].includes(urlObj.protocol)) {
+      throw new Error(`SSRF Protection: Only http and https protocols are allowed. Got: ${urlObj.protocol}`);
+    }
+    
+    // Block localhost and private IP ranges
+    const blockedPatterns = [
+      /^localhost$/i,
+      /^127\./,
+      /^10\./,
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+      /^192\.168\./,
+      /^::1$/,
+      /^fc00:/,
+      /^fe80:/
+    ];
+    
+    if (blockedPatterns.some(pattern => pattern.test(hostname))) {
+      throw new Error(`SSRF Protection: Blocked internal/private IP address: ${hostname}`);
+    }
+  } catch (error) {
+    if (error.message.includes("SSRF Protection") || error.message.includes("Invalid URL")) {
+      throw error;
+    }
+    throw new Error(`Invalid URL format: ${error.message}`);
+  }
+
+  // Build URL with query parameters
+  let finalUrl = urlString;
+  if (queryParams && Object.keys(queryParams).length > 0) {
+    const urlObj = new URL(urlString);
+    Object.entries(queryParams).forEach(([key, value]) => {
+      if (key && value !== null && value !== undefined) {
+        urlObj.searchParams.append(key, String(value));
+      }
+    });
+    finalUrl = urlObj.toString();
+  }
+
+  // Calculate timeout (prefer timeoutMs, then timeout, then timeoutSeconds)
+  const timeoutValue = timeoutMs || timeout || (timeoutSeconds * 1000);
+  const maxTimeout = 300000; // 5 minutes max
+  const finalTimeout = Math.min(Math.max(timeoutValue, 1000), maxTimeout);
+
   const axiosConfig = {
     method: method.toUpperCase(),
-    url,
+    url: finalUrl,
     headers: {
       "Content-Type": "application/json",
       ...headers
     },
-    timeout: timeoutSeconds * 1000
+    timeout: finalTimeout,
+    validateStatus: () => true // Don't throw on non-2xx, we'll handle it
   };
 
   // Add authentication
@@ -49,17 +118,142 @@ export async function executeHttpTask(task) {
   }
 
   // Add body for POST, PUT, PATCH
-  if (["POST", "PUT", "PATCH"].includes(method.toUpperCase()) && body) {
-    axiosConfig.data = typeof body === "string" ? JSON.parse(body) : body;
+  const methodUpper = method.toUpperCase();
+  if (["POST", "PUT", "PATCH"].includes(methodUpper)) {
+    if (body) {
+      // Validate JSON if body is provided
+      try {
+        if (typeof body === "string") {
+          axiosConfig.data = JSON.parse(body);
+        } else {
+          axiosConfig.data = body;
+        }
+      } catch (parseError) {
+        throw new Error(`Invalid JSON body: ${parseError.message}`);
+      }
+    }
+  } else if (["GET", "DELETE"].includes(methodUpper) && body) {
+    // GET and DELETE should not have body, but some APIs allow it
+    // We'll allow it but log a warning
+    console.warn(`HTTP ${methodUpper} request with body - this is non-standard`);
+    try {
+      if (typeof body === "string") {
+        axiosConfig.data = JSON.parse(body);
+      } else {
+        axiosConfig.data = body;
+      }
+    } catch (parseError) {
+      throw new Error(`Invalid JSON body: ${parseError.message}`);
+    }
   }
 
-  const response = await axios(axiosConfig);
-  return {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-    data: response.data
-  };
+  try {
+    const response = await axios(axiosConfig);
+    const durationMs = Date.now() - startTime;
+    
+    // Determine success (2xx status codes)
+    const success = response.status >= 200 && response.status < 300;
+    
+    // Mask sensitive headers in response for logging
+    const maskedHeaders = { ...response.headers };
+    if (maskedHeaders.authorization) {
+      maskedHeaders.authorization = "***MASKED***";
+    }
+    if (maskedHeaders["x-api-key"]) {
+      maskedHeaders["x-api-key"] = "***MASKED***";
+    }
+    
+    // Format response body (try to parse as JSON if possible)
+    let responseBody = response.data;
+    if (typeof response.data === "string") {
+      try {
+        responseBody = JSON.parse(response.data);
+      } catch {
+        // Keep as string if not valid JSON
+        responseBody = response.data;
+      }
+    }
+    
+    const result = {
+      statusCode: response.status,
+      statusText: response.statusText,
+      responseBody: responseBody,
+      responseHeaders: maskedHeaders,
+      durationMs: durationMs,
+      success: success,
+      // Include full response for backward compatibility
+      status: response.status,
+      headers: maskedHeaders,
+      data: responseBody
+    };
+    
+    // If non-2xx, throw error but include response data
+    if (!success) {
+      const error = new Error(`HTTP ${response.status} ${response.statusText}`);
+      error.response = result;
+      throw error;
+    }
+    
+    return result;
+  } catch (error) {
+    const durationMs = Date.now() - startTime;
+    
+    // Handle axios errors
+    if (error.response) {
+      // Server responded with error status
+      const maskedHeaders = { ...error.response.headers };
+      if (maskedHeaders.authorization) {
+        maskedHeaders.authorization = "***MASKED***";
+      }
+      
+      let responseBody = error.response.data;
+      if (typeof error.response.data === "string") {
+        try {
+          responseBody = JSON.parse(error.response.data);
+        } catch {
+          responseBody = error.response.data;
+        }
+      }
+      
+      const errorResult = {
+        statusCode: error.response.status,
+        statusText: error.response.statusText,
+        responseBody: responseBody,
+        responseHeaders: maskedHeaders,
+        durationMs: durationMs,
+        success: false,
+        error: `HTTP ${error.response.status}: ${error.response.statusText}`
+      };
+      
+      throw new Error(JSON.stringify(errorResult));
+    } else if (error.request) {
+      // Request was made but no response received (network error, timeout)
+      const errorResult = {
+        statusCode: 0,
+        statusText: "No Response",
+        responseBody: null,
+        responseHeaders: {},
+        durationMs: durationMs,
+        success: false,
+        error: error.code === "ECONNABORTED" ? "Request Timeout" : `Network Error: ${error.message}`
+      };
+      
+      throw new Error(JSON.stringify(errorResult));
+    } else {
+      // Error in request setup
+      const errorResult = {
+        statusCode: 0,
+        statusText: "Request Error",
+        responseBody: null,
+        responseHeaders: {},
+        durationMs: durationMs,
+        success: false,
+        error: error.message
+      };
+      
+      throw new Error(JSON.stringify(errorResult));
+    }
+  }
 }
 
 /**
@@ -67,7 +261,7 @@ export async function executeHttpTask(task) {
  * Sends emails using SMTP (requires nodemailer)
  */
 export async function executeEmailTask(task) {
-  const { to, subject, body, from, smtp, scheduled, scheduledDateTime } = task.config || {};
+  const { to, subject, body, from, smtp, scheduled, scheduledDateTime, attachments } = task.config || {};
   const executionId = task.executionId; // Get executionId from task object
 
   if (!to || !subject || !body) {
@@ -204,12 +398,41 @@ export async function executeEmailTask(task) {
       }
     });
 
+    // Prepare attachments if provided
+    let emailAttachments = [];
+    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+      for (const attachment of attachments) {
+        const filePath = attachment.path || attachment;
+        const fileName = attachment.filename || path.basename(filePath);
+        
+        // Resolve file path (can be absolute or relative to working directory)
+        const fullPath = path.isAbsolute(filePath) 
+          ? filePath 
+          : path.join(process.cwd(), filePath);
+        
+        try {
+          // Check if file exists
+          await fs.access(fullPath);
+          
+          emailAttachments.push({
+            filename: fileName,
+            path: fullPath
+          });
+          console.log(`📎 Attaching file: ${fullPath}`);
+        } catch (err) {
+          console.warn(`⚠️ Attachment file not found: ${fullPath}`);
+          // Continue without this attachment
+        }
+      }
+    }
+
     const mailOptions = {
       from: from || smtpConfig.user,
       to: Array.isArray(to) ? to.join(", ") : to,
       subject,
       text: body,
-      html: task.config.html || body
+      html: task.config.html || body,
+      attachments: emailAttachments.length > 0 ? emailAttachments : undefined
     };
 
     console.log(`📧 Attempting to send email to: ${to}`);
@@ -314,7 +537,7 @@ export async function executeDatabaseTask(task) {
  * Executes Node.js, Python, or Bash scripts
  */
 export async function executeScriptTask(task) {
-  const { script, language = "node", workingDir, env } = task.config || {};
+  const { script, language = "node", workingDir, env, inputData } = task.config || {};
 
   if (!script) {
     throw new Error("Script task requires 'script' in config");
@@ -331,14 +554,32 @@ export async function executeScriptTask(task) {
     case "javascript":
     case "js":
       scriptFile = path.join(scriptDir, `task-${Date.now()}.js`);
-      await fs.writeFile(scriptFile, script, "utf8");
+      
+      // Inject input data into the script
+      // If inputData is provided, wrap the script to define 'input' variable
+      let scriptContent = script;
+      if (inputData !== undefined && inputData !== null) {
+        // Stringify and escape for safe injection into JavaScript
+        const inputJson = JSON.stringify(inputData).replace(/`/g, '\\`').replace(/\$/g, '\\$');
+        scriptContent = `const input = ${inputJson};\n\n${script}`;
+      }
+      
+      await fs.writeFile(scriptFile, scriptContent, "utf8");
       command = `node "${scriptFile}"`;
       break;
 
     case "python":
     case "py":
       scriptFile = path.join(scriptDir, `task-${Date.now()}.py`);
-      await fs.writeFile(scriptFile, script, "utf8");
+      
+      // Inject input data into Python script
+      let pythonScript = script;
+      if (inputData !== undefined) {
+        const inputJson = JSON.stringify(inputData);
+        pythonScript = `import json\ninput = json.loads('${inputJson.replace(/'/g, "\\'")}')\n\n${script}`;
+      }
+      
+      await fs.writeFile(scriptFile, pythonScript, "utf8");
       command = `python "${scriptFile}"`;
       break;
 
@@ -346,7 +587,15 @@ export async function executeScriptTask(task) {
     case "sh":
     case "shell":
       scriptFile = path.join(scriptDir, `task-${Date.now()}.sh`);
-      await fs.writeFile(scriptFile, script, "utf8");
+      
+      // Inject input data into bash script via environment variable
+      let bashScript = script;
+      if (inputData !== undefined) {
+        const inputJson = JSON.stringify(inputData);
+        bashScript = `INPUT_DATA='${inputJson.replace(/'/g, "'\\''")}'\n# Parse with: input=$(echo "$INPUT_DATA" | jq .)\n\n${script}`;
+      }
+      
+      await fs.writeFile(scriptFile, bashScript, "utf8");
       await fs.chmod(scriptFile, 0o755);
       command = `bash "${scriptFile}"`;
       break;
@@ -582,6 +831,74 @@ export async function executeTransformTask(task) {
     return { transformed: result, inputData: input };
   } catch (error) {
     throw new Error(`Transform function error: ${error.message}`);
+  }
+}
+
+/**
+ * Conditional Logic Task Executor
+ * Evaluates conditions and returns boolean result
+ */
+export async function executeConditionTask(task) {
+  const { condition, inputData, operator = "equals" } = task.config || {};
+
+  if (!condition) {
+    throw new Error("Condition task requires 'condition' in config");
+  }
+
+  try {
+    const input = inputData || {};
+    let result = false;
+
+    // Support different condition types
+    if (typeof condition === "object" && condition.field && condition.value) {
+      const fieldValue = condition.field.includes(".") 
+        ? condition.field.split(".").reduce((obj, key) => obj?.[key], input)
+        : input[condition.field];
+
+      switch (operator.toLowerCase()) {
+        case "equals":
+        case "==":
+          result = fieldValue == condition.value;
+          break;
+        case "notequals":
+        case "!=":
+          result = fieldValue != condition.value;
+          break;
+        case "greaterthan":
+        case ">":
+          result = Number(fieldValue) > Number(condition.value);
+          break;
+        case "lessthan":
+        case "<":
+          result = Number(fieldValue) < Number(condition.value);
+          break;
+        case "contains":
+          result = String(fieldValue).includes(String(condition.value));
+          break;
+        case "exists":
+          result = fieldValue !== undefined && fieldValue !== null;
+          break;
+        case "regex":
+          const regex = new RegExp(condition.value);
+          result = regex.test(String(fieldValue));
+          break;
+        default:
+          result = fieldValue == condition.value;
+      }
+    } else if (typeof condition === "string") {
+      // Evaluate JavaScript expression
+      const func = new Function("input", `return ${condition}`);
+      result = Boolean(func(input));
+    }
+
+    return {
+      condition: condition,
+      result: result,
+      inputData: input,
+      passed: result
+    };
+  } catch (error) {
+    throw new Error(`Condition evaluation error: ${error.message}`);
   }
 }
 

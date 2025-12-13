@@ -1,7 +1,7 @@
 import DAG from "../models/Dag.js";
 import Execution from "../models/Execution.js";
 import redis from "../utils/redisClient.js";
-import { topologicalSort } from "../utils/dagUtils.js";
+import { topologicalSort, getStartNodes } from "../utils/dagUtils.js";
 
 // Helper function to detect cycles
 function hasCycle(nodes, edges) {
@@ -184,6 +184,62 @@ export const validateDAG = async (req, res) => {
   }
 };
 
+export const exportDAG = async (req, res) => {
+  try {
+    if (!req.user || !req.user._id) {
+      return sendResponse(res, 401, { error: "Authentication required" });
+    }
+
+    const dag = await DAG.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!dag) {
+      return sendResponse(res, 404, { error: "DAG not found" });
+    }
+
+    // Export DAG as JSON (without sensitive user data)
+    const exportData = {
+      name: dag.name,
+      description: dag.description,
+      graph: dag.graph,
+      schedule: dag.schedule,
+      retryConfig: dag.retryConfig,
+      version: "1.0",
+      exportedAt: new Date().toISOString()
+    };
+
+    return sendResponse(res, 200, { dag: exportData });
+  } catch (error) {
+    return sendResponse(res, 500, { error: error.message });
+  }
+};
+
+export const importDAG = async (req, res) => {
+  try {
+    if (!req.user || !req.user._id) {
+      return sendResponse(res, 401, { error: "Authentication required" });
+    }
+
+    const { dagData, name } = req.body;
+
+    if (!dagData || !dagData.graph) {
+      return sendResponse(res, 400, { error: "Invalid DAG data" });
+    }
+
+    const newDag = await DAG.create({
+      name: name || `${dagData.name} (Imported)`,
+      description: dagData.description || "",
+      userId: req.user._id,
+      graph: dagData.graph,
+      schedule: dagData.schedule || { enabled: false, type: "manual" },
+      retryConfig: dagData.retryConfig || { maxRetries: 3, retryDelay: 2000 },
+      isActive: false
+    });
+
+    return sendResponse(res, 201, { dag: newDag });
+  } catch (error) {
+    return sendResponse(res, 500, { error: error.message });
+  }
+};
+
 export const duplicateDAG = async (req, res) => {
   try {
     // Require authentication
@@ -231,18 +287,21 @@ export const executeDAG = async (req, res) => {
       timeline: { queuedAt: new Date() }
     });
     
-    // Enqueue first tasks
-    const order = topologicalSort(dag.graph.nodes, dag.graph.edges);
-    if (order.length > 0) {
-      const firstNodeId = order[0];
-      const node = dag.graph.nodes.find(n => n.id === firstNodeId);
+    // Enqueue all root tasks (no incoming edges). If none found, fall back to first node
+    const startNodeIds = getStartNodes(dag.graph.nodes, dag.graph.edges);
+    const nodesToQueue = startNodeIds.length > 0 ? startNodeIds : topologicalSort(dag.graph.nodes, dag.graph.edges).slice(0, 1);
+
+    for (const nodeId of nodesToQueue) {
+      const node = dag.graph.nodes.find(n => n.id === nodeId);
+      if (!node) continue;
       
       await redis.lpush(
         "queue:tasks",
         JSON.stringify({
           executionId: execution._id.toString(),
           dagId: dag._id.toString(),
-          task: node
+          task: node,
+          userId: req.user._id.toString()
         })
       );
     }

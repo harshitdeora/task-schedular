@@ -2,7 +2,7 @@ import cron from "node-cron";
 import DAG from "../models/Dag.js";
 import Execution from "../models/Execution.js";
 import redis from "../utils/redisClient.js";
-import { topologicalSort } from "../utils/dagUtils.js";
+import { topologicalSort, getStartNodes } from "../utils/dagUtils.js";
 
 // Store active cron jobs
 const activeCronJobs = new Map();
@@ -46,25 +46,29 @@ async function triggerDAGExecution(dag) {
       return;
     }
 
-    // Push first node (no dependencies) into Redis
-    const firstNodeId = order[0];
-    const node = dag.graph.nodes.find(n => n.id === firstNodeId);
-    
-    if (!node) {
-      console.warn(`⚠️ First node not found for DAG "${dag.name}"`);
-      return;
+    // Push all root nodes (no incoming edges) so parallel branches start
+    const startNodeIds = getStartNodes(dag.graph.nodes, dag.graph.edges);
+    const nodesToQueue = startNodeIds.length > 0 ? startNodeIds : [order[0]];
+
+    for (const nodeId of nodesToQueue) {
+      const node = dag.graph.nodes.find(n => n.id === nodeId);
+      if (!node) {
+        console.warn(`⚠️ Node ${nodeId} not found for DAG "${dag.name}"`);
+        continue;
+      }
+
+      await redis.lpush(
+        "queue:tasks",
+        JSON.stringify({
+          executionId: execution._id.toString(),
+          dagId: dag._id.toString(),
+          task: node,
+          userId: dag.userId?.toString()
+        })
+      );
     }
 
-    await redis.lpush(
-      "queue:tasks",
-      JSON.stringify({
-        executionId: execution._id.toString(),
-        dagId: dag._id.toString(),
-        task: node
-      })
-    );
-
-    console.log(`📤 Enqueued first task for DAG "${dag.name}" (execution: ${execution._id})`);
+    console.log(`📤 Enqueued ${nodesToQueue.length} start task(s) for DAG "${dag.name}" (execution: ${execution._id})`);
   } catch (error) {
     console.error(`❌ Error triggering DAG "${dag.name}":`, error);
   }

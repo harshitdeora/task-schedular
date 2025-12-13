@@ -92,6 +92,53 @@ export default function ExecutionMonitor() {
       <div className="container">
         <h1 style={{ marginBottom: "2rem" }}>Execution Monitor</h1>
 
+        {/* Currently Running Task - Prominent Display */}
+        {tasks.some(t => t.status === "running" || t.status === "started") && (
+          <div className="card" style={{ 
+            marginBottom: "2rem", 
+            background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+            color: "white",
+            border: "none"
+          }}>
+            <h3 style={{ marginBottom: "1rem", color: "white" }}>⚡ Currently Running Task</h3>
+            {tasks
+              .filter(t => t.status === "running" || t.status === "started")
+              .map((t) => (
+                <div key={t.taskId} style={{ 
+                  padding: "15px", 
+                  background: "rgba(255, 255, 255, 0.1)", 
+                  borderRadius: "8px",
+                  marginBottom: "10px"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: "18px", fontWeight: "bold", marginBottom: "5px" }}>
+                        {t.name || t.taskId}
+                      </div>
+                      <div style={{ fontSize: "14px", opacity: 0.9 }}>
+                        Execution ID: {t.executionId?.slice(-8) || "N/A"}
+                      </div>
+                      {t.timestamp && (
+                        <div style={{ fontSize: "12px", opacity: 0.8, marginTop: "5px" }}>
+                          Started: {new Date(t.timestamp).toLocaleTimeString()}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{
+                      padding: "8px 16px",
+                      borderRadius: "20px",
+                      backgroundColor: "rgba(255, 255, 255, 0.2)",
+                      fontSize: "14px",
+                      fontWeight: "bold"
+                    }}>
+                      {t.status.toUpperCase()}
+                    </div>
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
+
         {/* Running Executions */}
         <div className="card" style={{ marginBottom: "2rem" }}>
           <h3 style={{ marginBottom: "1rem" }}>Running Executions</h3>
@@ -99,21 +146,38 @@ export default function ExecutionMonitor() {
             <p>No running executions</p>
           ) : (
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              {executions.map((exec) => (
-                <button
-                  key={exec._id}
-                  onClick={() => setSelectedExecution(exec)}
-                  className={selectedExecution?._id === exec._id ? "custom-btn" : "custom-border-btn"}
-                  style={{ textAlign: "left" }}
-                >
-                  <div style={{ fontSize: "14px", fontWeight: "bold" }}>
-                    {exec.dagId?.name || "Unknown DAG"}
-                  </div>
-                  <div style={{ fontSize: "12px" }}>
-                    {exec.status} - {exec.timeline?.startedAt ? new Date(exec.timeline.startedAt).toLocaleTimeString() : "N/A"}
-                  </div>
-                </button>
-              ))}
+              {executions.map((exec) => {
+                // Find current running task for this execution
+                const currentTask = tasks.find(t => 
+                  t.executionId === exec._id && (t.status === "running" || t.status === "started")
+                );
+                
+                return (
+                  <button
+                    key={exec._id}
+                    onClick={() => setSelectedExecution(exec)}
+                    className={selectedExecution?._id === exec._id ? "custom-btn" : "custom-border-btn"}
+                    style={{ textAlign: "left", position: "relative" }}
+                  >
+                    <div style={{ fontSize: "14px", fontWeight: "bold" }}>
+                      {exec.dagId?.name || "Unknown DAG"}
+                    </div>
+                    <div style={{ fontSize: "12px" }}>
+                      {exec.status} - {exec.timeline?.startedAt ? new Date(exec.timeline.startedAt).toLocaleTimeString() : "N/A"}
+                    </div>
+                    {currentTask && (
+                      <div style={{ 
+                        fontSize: "11px", 
+                        color: "#3b82f6", 
+                        marginTop: "4px",
+                        fontWeight: "bold"
+                      }}>
+                        ▶ {currentTask.name}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -126,37 +190,69 @@ export default function ExecutionMonitor() {
               <p>No active tasks. Tasks will appear here when execution starts.</p>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                {tasks.map((t) => (
-                  <div
-                    key={t.taskId}
-                    style={{
-                      padding: "12px",
-                      border: "1px solid #ddd",
-                      borderRadius: "8px",
-                      backgroundColor: statusColors[t.status] ? `${statusColors[t.status]}20` : "#f5f5f5"
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <strong>{t.name || t.taskId}</strong>
-                      <span
+                {tasks
+                  .sort((a, b) => {
+                    // Sort: running first, then started, then others
+                    const order = { running: 0, started: 1, success: 2, failed: 3, queued: 4 };
+                    return (order[a.status] ?? 5) - (order[b.status] ?? 5);
+                  })
+                  .map((t) => {
+                    const isRunning = t.status === "running" || t.status === "started";
+                    return (
+                      <div
+                        key={t.taskId}
                         style={{
-                          padding: "4px 12px",
-                          borderRadius: "12px",
-                          backgroundColor: statusColors[t.status] || "#gray",
-                          color: "white",
-                          fontSize: "12px"
+                          padding: "12px",
+                          border: isRunning ? "2px solid #3b82f6" : "1px solid #ddd",
+                          borderRadius: "8px",
+                          backgroundColor: isRunning 
+                            ? "#3b82f620" 
+                            : statusColors[t.status] 
+                              ? `${statusColors[t.status]}20` 
+                              : "#f5f5f5",
+                          boxShadow: isRunning ? "0 2px 8px rgba(59, 130, 246, 0.3)" : "none"
                         }}
                       >
-                        {t.status}
-                      </span>
-                    </div>
-                    {t.error && (
-                      <div style={{ marginTop: "8px", color: "#ef4444", fontSize: "12px" }}>
-                        Error: {t.error}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div>
+                            <strong>{t.name || t.taskId}</strong>
+                            {isRunning && (
+                              <span style={{ 
+                                marginLeft: "10px", 
+                                fontSize: "11px", 
+                                color: "#3b82f6",
+                                fontWeight: "bold",
+                                animation: "pulse 2s infinite"
+                              }}>
+                                ▶ Currently Running
+                              </span>
+                            )}
+                          </div>
+                          <span
+                            style={{
+                              padding: "4px 12px",
+                              borderRadius: "12px",
+                              backgroundColor: statusColors[t.status] || "#gray",
+                              color: "white",
+                              fontSize: "12px"
+                            }}
+                          >
+                            {t.status}
+                          </span>
+                        </div>
+                        {t.error && (
+                          <div style={{ marginTop: "8px", color: "#ef4444", fontSize: "12px" }}>
+                            Error: {t.error}
+                          </div>
+                        )}
+                        {t.timestamp && (
+                          <div style={{ marginTop: "4px", fontSize: "11px", color: "#666" }}>
+                            {new Date(t.timestamp).toLocaleTimeString()}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
+                    );
+                  })}
               </div>
             )}
           </div>

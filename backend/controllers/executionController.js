@@ -1,7 +1,7 @@
 import Execution from "../models/Execution.js";
 import DAG from "../models/Dag.js";
 import redis from "../utils/redisClient.js";
-import { topologicalSort } from "../utils/dagUtils.js";
+import { topologicalSort, getStartNodes } from "../utils/dagUtils.js";
 
 export const getExecutions = async (req, res) => {
   try {
@@ -151,18 +151,21 @@ export const createExecution = async (req, res) => {
       timeline: { queuedAt: new Date() }
     });
 
-    // Enqueue first tasks
-    const order = topologicalSort(dag.graph.nodes, dag.graph.edges);
-    if (order.length > 0) {
-      const firstNodeId = order[0];
-      const node = dag.graph.nodes.find(n => n.id === firstNodeId);
+    // Enqueue all root tasks (no incoming edges). If none, enqueue first topo node
+    const startNodeIds = getStartNodes(dag.graph.nodes, dag.graph.edges);
+    const nodesToQueue = startNodeIds.length > 0 ? startNodeIds : topologicalSort(dag.graph.nodes, dag.graph.edges).slice(0, 1);
+
+    for (const nodeId of nodesToQueue) {
+      const node = dag.graph.nodes.find(n => n.id === nodeId);
+      if (!node) continue;
       
       await redis.lpush(
         "queue:tasks",
         JSON.stringify({
           executionId: execution._id.toString(),
           dagId: dag._id.toString(),
-          task: node
+          task: node,
+          userId: req.user._id.toString()
         })
       );
     }
@@ -213,6 +216,44 @@ export const cancelExecution = async (req, res) => {
   }
 };
 
+// Force-cancel/force-fail an execution regardless of current status
+export const forceCancelExecution = async (req, res) => {
+  try {
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, message: "Authentication required" });
+    }
+
+    const execution = await Execution.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!execution) {
+      return res.status(404).json({ success: false, message: "Execution not found" });
+    }
+
+    // Mark all non-terminal tasks as failed
+    if (execution.tasks && execution.tasks.length > 0) {
+      execution.tasks = execution.tasks.map((t) => {
+        if (t.status === "success" || t.status === "failed") return t;
+        return {
+          ...t,
+          status: "failed",
+          completedAt: new Date(),
+          error: t.error || "Force cancelled by user"
+        };
+      });
+    }
+
+    execution.status = "failed";
+    if (!execution.timeline) execution.timeline = {};
+    execution.timeline.completedAt = new Date();
+
+    await execution.save();
+
+    res.json({ success: true, execution });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+};
+
 export const retryExecution = async (req, res) => {
   try {
     // Require authentication
@@ -238,18 +279,21 @@ export const retryExecution = async (req, res) => {
       timeline: { queuedAt: new Date() }
     });
 
-    // Enqueue first tasks
-    const order = topologicalSort(dag.graph.nodes, dag.graph.edges);
-    if (order.length > 0) {
-      const firstNodeId = order[0];
-      const node = dag.graph.nodes.find(n => n.id === firstNodeId);
+    // Enqueue all root tasks (no incoming edges). If none, enqueue first topo node
+    const startNodeIds = getStartNodes(dag.graph.nodes, dag.graph.edges);
+    const nodesToQueue = startNodeIds.length > 0 ? startNodeIds : topologicalSort(dag.graph.nodes, dag.graph.edges).slice(0, 1);
+
+    for (const nodeId of nodesToQueue) {
+      const node = dag.graph.nodes.find(n => n.id === nodeId);
+      if (!node) continue;
       
       await redis.lpush(
         "queue:tasks",
         JSON.stringify({
           executionId: newExecution._id.toString(),
           dagId: dag._id.toString(),
-          task: node
+          task: node,
+          userId: req.user._id.toString()
         })
       );
     }

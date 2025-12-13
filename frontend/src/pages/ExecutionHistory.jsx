@@ -1,19 +1,47 @@
 import React, { useEffect, useState } from "react";
-import { getExecutions, retryExecution, deleteExecution, deleteAllExecutions } from "../api/executionApi";
+import { useNavigate } from "react-router-dom";
+import axios from "axios";
+import { getExecutions, retryExecution, deleteExecution, deleteAllExecutions, forceCancelExecution } from "../api/executionApi";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from "recharts";
 
 const COLORS = ["#10b981", "#ef4444", "#3b82f6", "#f59e0b"];
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 export default function ExecutionHistory() {
   const [executions, setExecutions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
+  const [expandedExecution, setExpandedExecution] = useState(null);
+  const navigate = useNavigate();
 
+  // Check authentication before fetching
   useEffect(() => {
-    fetchExecutions();
-    const interval = setInterval(fetchExecutions, 15000); // Reduced to 15 seconds
+    checkAuthAndFetch();
+    const interval = setInterval(checkAuthAndFetch, 15000);
     return () => clearInterval(interval);
-  }, [filter]); // Refetch when filter changes
+  }, [filter]);
+
+  const checkAuthAndFetch = async () => {
+    try {
+      // First verify user is authenticated
+      const authCheck = await axios.get(`${API_URL}/api/auth/me`, {
+        withCredentials: true
+      });
+      
+      if (!authCheck.data.success) {
+        // Not authenticated, redirect to login
+        navigate("/login");
+        return;
+      }
+      
+      // User is authenticated, fetch executions
+      await fetchExecutions();
+    } catch (error) {
+      // Auth check failed, redirect to login
+      console.error("Authentication check failed:", error);
+      navigate("/login");
+    }
+  };
 
   const deriveStatus = (exec) => {
     // Prefer server-side computed status, fallback to raw status
@@ -46,8 +74,17 @@ export default function ExecutionHistory() {
       console.error("Error fetching executions:", error);
       console.error("Error details:", error.response?.data);
       setLoading(false);
-      // Show error message to user
-      alert("Failed to load executions: " + (error.response?.data?.error || error.message));
+      
+      // If authentication error, redirect to login silently
+      if (error.response?.status === 401 || error.response?.data?.error === "Authentication required") {
+        // Don't show alert, just redirect
+        navigate("/login");
+        return;
+      }
+      
+      // Show error message to user for other errors
+      console.error("Failed to load executions: " + (error.response?.data?.error || error.message));
+      setExecutions([]); // Clear executions on error
     }
   };
 
@@ -70,6 +107,17 @@ export default function ExecutionHistory() {
       fetchExecutions();
     } catch (error) {
       alert("Error deleting execution: " + (error.response?.data?.message || error.message));
+    }
+  };
+
+  const handleForceCancel = async (id) => {
+    if (!window.confirm("Force fail this execution?")) return;
+    try {
+      await forceCancelExecution(id);
+      alert("Execution force-failed.");
+      fetchExecutions();
+    } catch (error) {
+      alert("Error force-failing execution: " + (error.response?.data?.message || error.message));
     }
   };
 
@@ -234,6 +282,7 @@ export default function ExecutionHistory() {
                   <tr>
                     <th>DAG Name</th>
                     <th>Status</th>
+                    <th>Current Task</th>
                     <th>Queued At</th>
                     <th>Started At</th>
                     <th>Completed At</th>
@@ -274,69 +323,340 @@ export default function ExecutionHistory() {
                       }
                     }
                     
+                    // Find currently running task
+                    const runningTask = exec.tasks?.find(t => 
+                      t.status === "running" || t.status === "started"
+                    );
+                    const currentTaskName = runningTask ? runningTask.name : 
+                      (displayStatus === "pending" || displayStatus === "running" ? "Processing..." : "N/A");
+                    
                     return (
-                      <tr key={exec._id}>
-                        <td>{dagName}</td>
-                        <td>
-                          <span
-                            style={{
-                              padding: "4px 12px",
-                              borderRadius: "12px",
-                              backgroundColor: statusColors[displayStatus] || statusColors[exec.status] || "#6b7280",
-                              color: "white",
-                              fontSize: "12px",
-                              fontWeight: "500",
-                              textTransform: "capitalize"
-                            }}
-                          >
-                            {displayStatus}
-                          </span>
-                        </td>
-                        <td>{exec.timeline?.queuedAt ? new Date(exec.timeline.queuedAt).toLocaleString() : "N/A"}</td>
-                        <td>
-                          {exec.timeline?.startedAt 
-                            ? new Date(exec.timeline.startedAt).toLocaleString() 
-                            : exec.status === "queued" 
-                              ? "Queued..." 
-                              : "N/A"}
-                        </td>
-                        <td>
-                            {exec.timeline?.completedAt 
-                            ? new Date(exec.timeline.completedAt).toLocaleString() 
-                            : displayStatus === "success" || displayStatus === "failed"
-                              ? "Completed" 
-                              : "N/A"}
-                        </td>
-                        <td>{duration}</td>
-                        <td>
-                          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                            {displayStatus === "failed" && (
-                              <button
-                                onClick={() => handleRetry(exec._id)}
-                                className="custom-btn"
-                                style={{ padding: "4px 12px", fontSize: "12px" }}
-                              >
-                                Retry
-                              </button>
+                      <React.Fragment key={exec._id}>
+                        <tr>
+                          <td>{dagName}</td>
+                          <td>
+                            <span
+                              style={{
+                                padding: "4px 12px",
+                                borderRadius: "12px",
+                                backgroundColor: statusColors[displayStatus] || statusColors[exec.status] || "#6b7280",
+                                color: "white",
+                                fontSize: "12px",
+                                fontWeight: "500",
+                                textTransform: "capitalize"
+                              }}
+                            >
+                              {displayStatus}
+                            </span>
+                          </td>
+                          <td>
+                            {runningTask ? (
+                              <span style={{
+                                padding: "4px 12px",
+                                borderRadius: "12px",
+                                backgroundColor: "#3b82f6",
+                                color: "white",
+                                fontSize: "12px",
+                                fontWeight: "500"
+                              }}>
+                                ▶ {currentTaskName}
+                              </span>
+                            ) : (
+                              <span style={{ color: "#666", fontSize: "12px" }}>{currentTaskName}</span>
                             )}
-                            {(displayStatus === "success" || displayStatus === "failed" || displayStatus === "cancelled") && (
+                          </td>
+                          <td>{exec.timeline?.queuedAt ? new Date(exec.timeline.queuedAt).toLocaleString() : "N/A"}</td>
+                          <td>
+                            {exec.timeline?.startedAt 
+                              ? new Date(exec.timeline.startedAt).toLocaleString() 
+                              : exec.status === "queued" 
+                                ? "Queued..." 
+                                : "N/A"}
+                          </td>
+                          <td>
+                              {exec.timeline?.completedAt 
+                              ? new Date(exec.timeline.completedAt).toLocaleString() 
+                              : displayStatus === "success" || displayStatus === "failed"
+                                ? "Completed" 
+                                : "N/A"}
+                          </td>
+                          <td>{duration}</td>
+                          <td>
+                            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                               <button
-                                onClick={() => handleDelete(exec._id)}
+                                onClick={() => setExpandedExecution(expandedExecution === exec._id ? null : exec._id)}
                                 className="custom-border-btn"
                                 style={{ 
                                   padding: "4px 12px", 
                                   fontSize: "12px",
-                                  backgroundColor: "#ef4444",
-                                  color: "white",
-                                  border: "none"
+                                  backgroundColor: expandedExecution === exec._id ? "#13547a" : "transparent",
+                                  color: expandedExecution === exec._id ? "white" : "#13547a",
+                                  border: "1px solid #13547a"
                                 }}
                               >
-                                Delete
+                                {expandedExecution === exec._id ? "▼ Hide" : "▶ View"} Details
                               </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
+                              {displayStatus === "failed" && (
+                                <button
+                                  onClick={() => handleRetry(exec._id)}
+                                  className="custom-btn"
+                                  style={{ padding: "4px 12px", fontSize: "12px" }}
+                                >
+                                  Retry
+                                </button>
+                              )}
+                              {(displayStatus === "success" || displayStatus === "failed" || displayStatus === "cancelled") && (
+                                <button
+                                  onClick={() => handleDelete(exec._id)}
+                                  className="custom-border-btn"
+                                  style={{ 
+                                    padding: "4px 12px", 
+                                    fontSize: "12px",
+                                    backgroundColor: "#ef4444",
+                                    color: "white",
+                                    border: "none"
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              )}
+                              {(displayStatus === "pending") && (
+                                <button
+                                  onClick={() => handleForceCancel(exec._id)}
+                                  className="custom-border-btn"
+                                  style={{
+                                    padding: "4px 12px",
+                                    fontSize: "12px",
+                                    backgroundColor: "#f59e0b",
+                                    color: "white",
+                                    border: "none"
+                                  }}
+                                >
+                                  Force Fail
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        {expandedExecution === exec._id && (
+                          <tr>
+                            <td colSpan="8" style={{ padding: "20px", backgroundColor: "#f9fafb" }}>
+                            <div style={{ marginTop: "10px" }}>
+                              <h4 style={{ marginBottom: "15px", color: "#13547a" }}>Task Details</h4>
+                              {exec.tasks && exec.tasks.length > 0 ? (
+                                <div style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
+                                  {exec.tasks.map((task, idx) => (
+                                    <div 
+                                      key={idx} 
+                                      style={{ 
+                                        border: "1px solid #e5e7eb", 
+                                        borderRadius: "8px", 
+                                        padding: "15px",
+                                        backgroundColor: "white"
+                                      }}
+                                    >
+                                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                                        <div>
+                                          <strong style={{ fontSize: "16px" }}>{task.name || `Task ${idx + 1}`}</strong>
+                                          <span
+                                            style={{
+                                              marginLeft: "10px",
+                                              padding: "4px 12px",
+                                              borderRadius: "12px",
+                                              backgroundColor: statusColors[task.status] || "#6b7280",
+                                              color: "white",
+                                              fontSize: "12px",
+                                              fontWeight: "500"
+                                            }}
+                                          >
+                                            {task.status}
+                                          </span>
+                                        </div>
+                                        <div style={{ fontSize: "12px", color: "#666" }}>
+                                          {task.startedAt && `Started: ${new Date(task.startedAt).toLocaleString()}`}
+                                          {task.completedAt && ` | Completed: ${new Date(task.completedAt).toLocaleString()}`}
+                                        </div>
+                                      </div>
+                                      
+                                      {task.error && (
+                                        <div style={{ 
+                                          padding: "10px", 
+                                          backgroundColor: "#fee2e2", 
+                                          borderRadius: "6px", 
+                                          marginBottom: "10px",
+                                          border: "1px solid #fecaca"
+                                        }}>
+                                          <strong style={{ color: "#dc2626" }}>Error:</strong>
+                                          <pre style={{ 
+                                            marginTop: "5px", 
+                                            fontSize: "12px", 
+                                            color: "#991b1b",
+                                            whiteSpace: "pre-wrap",
+                                            wordBreak: "break-word"
+                                          }}>
+                                            {typeof task.error === "string" ? task.error : JSON.stringify(task.error, null, 2)}
+                                          </pre>
+                                        </div>
+                                      )}
+
+                                      {task.output && (
+                                        <div style={{ marginTop: "10px" }}>
+                                          <strong style={{ color: "#13547a", fontSize: "14px" }}>Output:</strong>
+                                          
+                                          {/* HTTP Request Task Output */}
+                                          {task.output.statusCode !== undefined || task.output.responseBody !== undefined ? (
+                                            <div style={{ 
+                                              marginTop: "10px", 
+                                              padding: "15px", 
+                                              backgroundColor: "#f0f9ff", 
+                                              borderRadius: "6px",
+                                              border: "1px solid #bae6fd"
+                                            }}>
+                                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "15px", marginBottom: "15px" }}>
+                                                <div>
+                                                  <strong style={{ color: "#13547a", fontSize: "12px" }}>HTTP Status:</strong>
+                                                  <div style={{ 
+                                                    marginTop: "5px",
+                                                    padding: "6px 12px",
+                                                    borderRadius: "6px",
+                                                    backgroundColor: task.output.statusCode >= 200 && task.output.statusCode < 300 ? "#d1fae5" : "#fee2e2",
+                                                    color: task.output.statusCode >= 200 && task.output.statusCode < 300 ? "#065f46" : "#991b1b",
+                                                    display: "inline-block",
+                                                    fontWeight: "bold"
+                                                  }}>
+                                                    {task.output.statusCode} {task.output.statusText || ""}
+                                                  </div>
+                                                </div>
+                                                {task.output.durationMs !== undefined && (
+                                                  <div>
+                                                    <strong style={{ color: "#13547a", fontSize: "12px" }}>Duration:</strong>
+                                                    <div style={{ marginTop: "5px", fontSize: "14px", color: "#666" }}>
+                                                      {task.output.durationMs}ms
+                                                    </div>
+                                                  </div>
+                                                )}
+                                                {task.output.success !== undefined && (
+                                                  <div>
+                                                    <strong style={{ color: "#13547a", fontSize: "12px" }}>Success:</strong>
+                                                    <div style={{ 
+                                                      marginTop: "5px",
+                                                      padding: "4px 8px",
+                                                      borderRadius: "6px",
+                                                      backgroundColor: task.output.success ? "#d1fae5" : "#fee2e2",
+                                                      color: task.output.success ? "#065f46" : "#991b1b",
+                                                      display: "inline-block",
+                                                      fontSize: "12px",
+                                                      fontWeight: "bold"
+                                                    }}>
+                                                      {task.output.success ? "✓ Yes" : "✗ No"}
+                                                    </div>
+                                                  </div>
+                                                )}
+                                              </div>
+
+                                              {task.output.responseBody && (
+                                                <div style={{ marginTop: "15px" }}>
+                                                  <strong style={{ color: "#13547a", fontSize: "12px", display: "block", marginBottom: "8px" }}>Response Body:</strong>
+                                                  <pre style={{ 
+                                                    padding: "12px", 
+                                                    backgroundColor: "#1e293b", 
+                                                    color: "#e2e8f0",
+                                                    borderRadius: "6px",
+                                                    overflow: "auto",
+                                                    fontSize: "12px",
+                                                    maxHeight: "400px",
+                                                    fontFamily: "'Courier New', monospace"
+                                                  }}>
+                                                    {typeof task.output.responseBody === "string" 
+                                                      ? task.output.responseBody 
+                                                      : JSON.stringify(task.output.responseBody, null, 2)}
+                                                  </pre>
+                                                </div>
+                                              )}
+
+                                              {task.output.responseHeaders && Object.keys(task.output.responseHeaders).length > 0 && (
+                                                <div style={{ marginTop: "15px" }}>
+                                                  <strong style={{ color: "#13547a", fontSize: "12px", display: "block", marginBottom: "8px" }}>Response Headers:</strong>
+                                                  <div style={{ 
+                                                    padding: "12px", 
+                                                    backgroundColor: "#f8fafc", 
+                                                    borderRadius: "6px",
+                                                    border: "1px solid #e2e8f0"
+                                                  }}>
+                                                    {Object.entries(task.output.responseHeaders).map(([key, value]) => (
+                                                      <div key={key} style={{ 
+                                                        display: "flex", 
+                                                        padding: "4px 0",
+                                                        borderBottom: "1px solid #e2e8f0",
+                                                        fontSize: "12px"
+                                                      }}>
+                                                        <strong style={{ color: "#475569", minWidth: "200px" }}>{key}:</strong>
+                                                        <span style={{ color: "#64748b", wordBreak: "break-word" }}>{String(value)}</span>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                </div>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            /* Generic Output Display */
+                                            <div style={{ 
+                                              marginTop: "10px", 
+                                              padding: "12px", 
+                                              backgroundColor: "#f8fafc", 
+                                              borderRadius: "6px",
+                                              border: "1px solid #e2e8f0"
+                                            }}>
+                                              <pre style={{ 
+                                                margin: 0,
+                                                fontSize: "12px",
+                                                whiteSpace: "pre-wrap",
+                                                wordBreak: "break-word",
+                                                fontFamily: "'Courier New', monospace"
+                                              }}>
+                                                {typeof task.output === "string" 
+                                                  ? task.output 
+                                                  : JSON.stringify(task.output, null, 2)}
+                                              </pre>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+
+                                      {task.logs && (
+                                        <div style={{ marginTop: "10px" }}>
+                                          <strong style={{ color: "#13547a", fontSize: "14px" }}>Logs:</strong>
+                                          <pre style={{ 
+                                            marginTop: "5px", 
+                                            padding: "10px", 
+                                            backgroundColor: "#f8fafc", 
+                                            borderRadius: "6px",
+                                            fontSize: "11px",
+                                            whiteSpace: "pre-wrap",
+                                            wordBreak: "break-word",
+                                            fontFamily: "'Courier New', monospace"
+                                          }}>
+                                            {task.logs}
+                                          </pre>
+                                        </div>
+                                      )}
+
+                                      {!task.output && !task.error && !task.logs && (
+                                        <div style={{ color: "#9ca3af", fontSize: "12px", fontStyle: "italic" }}>
+                                          No output available
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p style={{ color: "#6b7280" }}>No tasks found for this execution</p>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>

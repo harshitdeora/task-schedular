@@ -68,10 +68,33 @@ export default function TaskConfigPanel({ node, onUpdate, onClose }) {
   const renderConfigFields = () => {
     switch (taskType) {
       case "http":
+        const httpMethod = config.method || "GET";
+        const showBody = ["POST", "PUT", "PATCH"].includes(httpMethod);
+        
         return (
           <>
             <div>
-              <label>URL *</label>
+              <label>HTTP Method *</label>
+              <select
+                value={httpMethod}
+                onChange={(e) => {
+                  updateConfig("method", e.target.value);
+                  // Clear body for GET/DELETE
+                  if (["GET", "DELETE"].includes(e.target.value)) {
+                    updateConfig("body", null);
+                  }
+                }}
+                className="custom-form form-control"
+              >
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+            </div>
+            <div>
+              <label>Request URL *</label>
               <input
                 type="text"
                 value={config.url || ""}
@@ -79,57 +102,204 @@ export default function TaskConfigPanel({ node, onUpdate, onClose }) {
                 placeholder="https://api.example.com/endpoint"
                 className="custom-form form-control"
               />
+              <small style={{ fontSize: "11px", color: "#666", display: "block", marginTop: "5px" }}>
+                Full URL including protocol (http/https)
+              </small>
             </div>
             <div>
-              <label>Method</label>
-              <select
-                value={config.method || "GET"}
-                onChange={(e) => updateConfig("method", e.target.value)}
-                className="custom-form form-control"
-              >
-                <option>GET</option>
-                <option>POST</option>
-                <option>PUT</option>
-                <option>DELETE</option>
-                <option>PATCH</option>
-              </select>
+              <label>Query Parameters (Key-Value)</label>
+              <div style={{ marginBottom: "5px" }}>
+                {config.queryParams && Object.keys(config.queryParams || {}).length > 0 ? (
+                  Object.entries(config.queryParams || {}).map(([key, value], idx) => (
+                    <div key={idx} style={{ display: "flex", gap: "5px", marginBottom: "5px" }}>
+                      <input
+                        type="text"
+                        value={key}
+                        onChange={(e) => {
+                          const newParams = { ...(config.queryParams || {}) };
+                          delete newParams[key];
+                          newParams[e.target.value] = value;
+                          updateConfig("queryParams", newParams);
+                        }}
+                        placeholder="Key"
+                        style={{ flex: 1, padding: "5px", fontSize: "12px" }}
+                      />
+                      <input
+                        type="text"
+                        value={value}
+                        onChange={(e) => {
+                          updateConfig("queryParams", {
+                            ...(config.queryParams || {}),
+                            [key]: e.target.value
+                          });
+                        }}
+                        placeholder="Value"
+                        style={{ flex: 1, padding: "5px", fontSize: "12px" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newParams = { ...(config.queryParams || {}) };
+                          delete newParams[key];
+                          updateConfig("queryParams", newParams);
+                        }}
+                        style={{ padding: "5px 10px", background: "#ff4444", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <p style={{ fontSize: "12px", color: "#999", fontStyle: "italic" }}>No query parameters</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateConfig("queryParams", {
+                      ...(config.queryParams || {}),
+                      "": ""
+                    });
+                  }}
+                  style={{ marginTop: "5px", padding: "5px 10px", background: "#4CAF50", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}
+                >
+                  + Add Parameter
+                </button>
+              </div>
             </div>
             <div>
-              <label>Headers (JSON)</label>
-              <textarea
-                value={config.headers ? JSON.stringify(config.headers, null, 2) : "{}"}
-                onChange={(e) => {
-                  try {
-                    updateConfig("headers", JSON.parse(e.target.value));
-                  } catch {}
-                }}
-                placeholder='{"Authorization": "Bearer token"}'
-                className="custom-form form-control"
-                rows="3"
-              />
+              <label>Headers (Key-Value)</label>
+              <div style={{ marginBottom: "5px" }}>
+                {config.headers && Object.keys(config.headers || {}).length > 0 ? (
+                  Object.entries(config.headers || {}).map(([key, value], idx) => (
+                    <div key={idx} style={{ display: "flex", gap: "5px", marginBottom: "5px" }}>
+                      <input
+                        type="text"
+                        value={key}
+                        onChange={(e) => {
+                          const newHeaders = { ...(config.headers || {}) };
+                          delete newHeaders[key];
+                          newHeaders[e.target.value] = value;
+                          updateConfig("headers", newHeaders);
+                        }}
+                        placeholder="Header Name"
+                        style={{ flex: 1, padding: "5px", fontSize: "12px" }}
+                      />
+                      <input
+                        type="text"
+                        value={value}
+                        onChange={(e) => {
+                          updateConfig("headers", {
+                            ...(config.headers || {}),
+                            [key]: e.target.value
+                          });
+                        }}
+                        placeholder="Header Value"
+                        style={{ flex: 1, padding: "5px", fontSize: "12px" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newHeaders = { ...(config.headers || {}) };
+                          delete newHeaders[key];
+                          updateConfig("headers", newHeaders);
+                        }}
+                        style={{ padding: "5px 10px", background: "#ff4444", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <p style={{ fontSize: "12px", color: "#999", fontStyle: "italic" }}>No custom headers</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateConfig("headers", {
+                      ...(config.headers || {}),
+                      "": ""
+                    });
+                  }}
+                  style={{ marginTop: "5px", padding: "5px 10px", background: "#4CAF50", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}
+                >
+                  + Add Header
+                </button>
+              </div>
+              <small style={{ fontSize: "11px", color: "#666", display: "block", marginTop: "5px" }}>
+                Common: Authorization, Content-Type, X-API-Key
+              </small>
             </div>
+            {showBody && (
+              <div>
+                <label>Request Body (JSON) *</label>
+                <textarea
+                  value={config.body ? (typeof config.body === "string" ? config.body : JSON.stringify(config.body, null, 2)) : ""}
+                  onChange={(e) => {
+                    const value = e.target.value.trim();
+                    if (!value) {
+                      updateConfig("body", null);
+                      return;
+                    }
+                    try {
+                      // Try to parse as JSON
+                      const parsed = JSON.parse(value);
+                      updateConfig("body", parsed);
+                    } catch {
+                      // If not valid JSON, store as string (will be validated on execution)
+                      updateConfig("body", value);
+                    }
+                  }}
+                  placeholder='{"key": "value", "email": "test@example.com"}'
+                  className="custom-form form-control"
+                  rows="6"
+                  style={{ fontFamily: "monospace", fontSize: "12px" }}
+                />
+                <small style={{ fontSize: "11px", color: "#666", display: "block", marginTop: "5px" }}>
+                  Valid JSON required. Will be validated before sending.
+                </small>
+              </div>
+            )}
             <div>
-              <label>Body (JSON, for POST/PUT)</label>
-              <textarea
-                value={config.body ? JSON.stringify(config.body, null, 2) : ""}
-                onChange={(e) => {
-                  try {
-                    updateConfig("body", JSON.parse(e.target.value));
-                  } catch {}
-                }}
-                placeholder='{"key": "value"}'
-                className="custom-form form-control"
-                rows="3"
-              />
-            </div>
-            <div>
-              <label>Timeout (seconds)</label>
+              <label>Timeout (milliseconds)</label>
               <input
                 type="number"
-                value={config.timeoutSeconds || 30}
-                onChange={(e) => updateConfig("timeoutSeconds", parseInt(e.target.value))}
+                value={config.timeout || config.timeoutMs || 30000}
+                onChange={(e) => {
+                  const ms = parseInt(e.target.value) || 30000;
+                  updateConfig("timeout", ms);
+                  updateConfig("timeoutMs", ms);
+                }}
+                min="1000"
+                max="300000"
                 className="custom-form form-control"
               />
+              <small style={{ fontSize: "11px", color: "#666", display: "block", marginTop: "5px" }}>
+                Default: 30000ms (30 seconds). Max: 300000ms (5 minutes)
+              </small>
+            </div>
+            <div>
+              <label>Retry Count</label>
+              <input
+                type="number"
+                value={config.retries || config.retryCount || 0}
+                onChange={(e) => {
+                  const count = parseInt(e.target.value) || 0;
+                  updateConfig("retries", count);
+                  updateConfig("retryCount", count);
+                }}
+                min="0"
+                max="10"
+                className="custom-form form-control"
+              />
+              <small style={{ fontSize: "11px", color: "#666", display: "block", marginTop: "5px" }}>
+                Number of automatic retries on failure (0 = no retries)
+              </small>
+            </div>
+            <div style={{ padding: "10px", background: "#e3f2fd", borderRadius: "8px", marginTop: "10px" }}>
+              <strong style={{ color: "#13547a", fontSize: "13px" }}>📊 Response Storage:</strong>
+              <p style={{ fontSize: "12px", color: "#666", margin: "5px 0 0 0" }}>
+                Response will be stored with: status code, response body, headers, duration, and success status.
+              </p>
             </div>
           </>
         );
@@ -186,6 +356,28 @@ export default function TaskConfigPanel({ node, onUpdate, onClose }) {
                 className="custom-form form-control"
                 rows="5"
               />
+            </div>
+            <div>
+              <label>Attachments (File Paths)</label>
+              <textarea
+                value={config.attachments ? (Array.isArray(config.attachments) ? config.attachments.map(a => typeof a === 'string' ? a : a.path || a.filename).join('\n') : '') : ''}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  const paths = e.target.value.split('\n').filter(p => p.trim());
+                  updateConfig("attachments", paths.map(path => ({ path: path.trim(), filename: path.split('/').pop().trim() })));
+                }}
+                onFocus={(e) => e.stopPropagation()}
+                onBlur={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                placeholder="reports/daily-report-2024-01-15.txt&#10;logs/error.log"
+                className="custom-form form-control"
+                rows="3"
+              />
+              <small style={{ fontSize: "11px", color: "#666", display: "block", marginTop: "5px" }}>
+                Enter file paths (one per line). Files should be created by previous tasks in your DAG.
+                <br />
+                Example: <code>reports/daily-report-2024-01-15.txt</code>
+              </small>
             </div>
             <div style={{ padding: "10px", background: "#e8f5e9", borderRadius: "8px", marginBottom: "15px" }}>
               <strong style={{ color: "#13547a", fontSize: "13px" }}>📧 Sender Email:</strong>
