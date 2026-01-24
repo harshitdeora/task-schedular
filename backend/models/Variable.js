@@ -35,3 +35,15 @@ variableSchema.methods.getDecryptedValue = function () {
 export default mongoose.model("Variable", variableSchema);
 
 
+
+
+
+
+
+
+
+
+
+
+
+

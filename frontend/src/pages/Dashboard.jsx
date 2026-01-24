@@ -195,9 +195,38 @@ export default function Dashboard({ user }) {
         </div>
 
         {/* Quick Actions */}
-        <div style={{ marginTop: "2rem", display: "flex", gap: "15px" }}>
-          <Link to="/builder" className="custom-btn">Create New DAG</Link>
-          <Link to="/dags" className="custom-border-btn">View All DAGs</Link>
+        <div style={{ marginTop: "2rem", display: "flex", gap: "12px", flexWrap: "wrap" }}>
+          <Link
+            to="/builder"
+            className="custom-btn"
+            style={{
+              padding: "10px 18px",
+              fontSize: "13px",
+              letterSpacing: "0.04em",
+              background: "linear-gradient(135deg, #1d4ed8, #2563eb)",
+              border: "1px solid rgba(59,130,246,0.7)",
+              boxShadow: "0 14px 35px rgba(15,23,42,0.9)",
+              borderRadius: 999
+            }}
+          >
+            Create New DAG
+          </Link>
+          <Link
+            to="/dags"
+            className="custom-border-btn"
+            style={{
+              padding: "10px 18px",
+              fontSize: "13px",
+              letterSpacing: "0.04em",
+              color: "#e5e7eb",
+              background: "rgba(15,23,42,0.92)",
+              border: "1px solid rgba(59,130,246,0.65)",
+              boxShadow: "0 14px 35px rgba(15,23,42,0.9)",
+              borderRadius: 999
+            }}
+          >
+            View All DAGs
+          </Link>
         </div>
 
       </div>

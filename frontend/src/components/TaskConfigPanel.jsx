@@ -9,7 +9,14 @@ const TASK_TYPES = [
   { value: "webhook", label: "Webhook", icon: "🔗" },
   { value: "delay", label: "Delay/Wait", icon: "⏱️" },
   { value: "notification", label: "Notification", icon: "🔔" },
-  { value: "transform", label: "Data Transform", icon: "🔄" }
+  { value: "transform", label: "Data Transform", icon: "🔄" },
+  { value: "condition", label: "Condition", icon: "🔀" },
+  { value: "ai_logic", label: "AI Smart-Logic", icon: "🤖" },
+  { value: "pdf_gen", label: "PDF Generator", icon: "📄" },
+  { value: "json_filter", label: "JSON Parser", icon: "🔍" },
+  { value: "image_proc", label: "Image Processor", icon: "🖼️" },
+  { value: "html_to_md", label: "HTML to Markdown", icon: "📝" },
+  { value: "pause", label: "Wait for Signal", icon: "⏸️" }
 ];
 
 export default function TaskConfigPanel({ node, onUpdate, onClose }) {

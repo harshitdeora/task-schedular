@@ -8,7 +8,8 @@ import {
   retryExecution,
   forceCancelExecution,
   deleteExecution,
-  deleteAllExecutions
+  deleteAllExecutions,
+  resumeExecution
 } from "../controllers/executionController.js";
 
 const router = express.Router();
@@ -18,6 +19,7 @@ router.route("/:id").get(getExecutionById).put(updateExecution).delete(deleteExe
 router.post("/:id/cancel", cancelExecution);
 router.post("/:id/retry", retryExecution);
 router.post("/:id/force-cancel", forceCancelExecution);
+router.post("/:id/resume", resumeExecution);
 
 export default router;
 

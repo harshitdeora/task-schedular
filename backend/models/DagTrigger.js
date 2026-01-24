@@ -39,3 +39,15 @@ dagTriggerSchema.index({ userId: 1 });
 export default mongoose.model("DagTrigger", dagTriggerSchema);
 
 
+
+
+
+
+
+
+
+
+
+
+
+

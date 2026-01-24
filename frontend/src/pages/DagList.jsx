@@ -60,15 +60,50 @@ export default function DagList() {
           <Link to="/builder" className="custom-btn">Create New DAG</Link>
         </div>
 
-        <div style={{ marginBottom: "2rem" }}>
-          <input
-            type="text"
-            placeholder="Search DAGs..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="custom-form form-control"
-            style={{ maxWidth: "400px" }}
-          />
+        <div style={{ marginBottom: "2rem", maxWidth: "420px" }}>
+          <label
+            htmlFor="dag-search"
+            style={{
+              display: "block",
+              marginBottom: "0.5rem",
+              color: "#e5e7eb",
+              fontSize: "13px",
+              letterSpacing: "0.04em",
+              textTransform: "uppercase"
+            }}
+          >
+            Search DAGs
+          </label>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              padding: "10px 14px",
+              borderRadius: "999px",
+              background: "rgba(15,23,42,0.92)",
+              border: "1px solid rgba(55,65,81,0.9)",
+              boxShadow: "0 16px 40px rgba(2,6,23,0.85)"
+            }}
+          >
+            <span style={{ color: "#64748b", fontSize: "18px" }}>🔍</span>
+            <input
+              id="dag-search"
+              type="text"
+              placeholder="Search DAGs..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                flex: 1,
+                background: "transparent",
+                border: "none",
+                outline: "none",
+                color: "#e5e7eb",
+                fontSize: "14px",
+                letterSpacing: "0.02em"
+              }}
+            />
+          </div>
         </div>
 
         {loading ? (

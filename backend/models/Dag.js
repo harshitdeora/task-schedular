@@ -5,14 +5,22 @@ const nodeSchema = new mongoose.Schema({
   type: String,
   name: String,
   config: Object,
-  position: Object
+  position: Object,
+  retryPolicy: {
+    maxRetries: { type: Number, default: null }, // null means use DAG-level retryConfig
+    initialDelay: { type: Number, default: 1000 }, // Initial delay in ms
+    maxDelay: { type: Number, default: 30000 }, // Max delay in ms (for exponential backoff)
+    multiplier: { type: Number, default: 2 } // Exponential backoff multiplier
+  }
 });
 
 const edgeSchema = new mongoose.Schema({
   id: String,
   source: String,
   target: String,
-  type: String
+  type: { type: String, default: "success" }, // "success" or "failure"
+  sourceHandle: String, // "source" (success) or "failure" (failure path)
+  targetHandle: String
 });
 
 const dagSchema = new mongoose.Schema({

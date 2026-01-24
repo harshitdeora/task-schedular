@@ -902,3 +902,351 @@ export async function executeConditionTask(task) {
   }
 }
 
+/**
+ * AI Smart-Logic Task Executor
+ * Integrates OpenAI or Google Generative AI with dynamic prompt substitution
+ */
+export async function executeAiLogicTask(task) {
+  const { provider = "openai", prompt, model, temperature = 0.7, maxTokens, apiKeyVariable } = task.config || {};
+
+  if (!prompt) {
+    throw new Error("AI Logic task requires 'prompt' in config");
+  }
+
+  try {
+    // Get API key from variables if apiKeyVariable is provided
+    let apiKey = null;
+    if (apiKeyVariable && task.executionId) {
+      const Execution = (await import("../models/Execution.js")).default;
+      const Variable = (await import("../models/Variable.js")).default;
+      const execution = await Execution.findById(task.executionId);
+      
+      if (execution && execution.userId) {
+        const variable = await Variable.findOne({ 
+          userId: execution.userId, 
+          name: apiKeyVariable 
+        });
+        if (variable) {
+          apiKey = variable.getDecryptedValue();
+        }
+      }
+    }
+
+    // Fallback to config API key if variable not found
+    if (!apiKey && task.config.apiKey) {
+      apiKey = task.config.apiKey;
+    }
+
+    if (!apiKey) {
+      throw new Error(`API key not found. Please set 'apiKeyVariable' or 'apiKey' in config`);
+    }
+
+    if (provider === "openai" || provider === "gpt") {
+      const OpenAI = (await import("openai")).default;
+      const openai = new OpenAI({ apiKey });
+
+      const response = await openai.chat.completions.create({
+        model: model || "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        temperature: temperature,
+        max_tokens: maxTokens || 1000
+      });
+
+      const content = response.choices[0]?.message?.content || "";
+      
+      // Try to parse as JSON if possible
+      let parsedContent = content;
+      try {
+        parsedContent = JSON.parse(content);
+      } catch {
+        // Not JSON, return as string
+      }
+
+      return {
+        provider: "openai",
+        model: model || "gpt-3.5-turbo",
+        response: parsedContent,
+        rawResponse: content,
+        usage: response.usage
+      };
+    } else if (provider === "google" || provider === "gemini") {
+      try {
+        const { GoogleGenerativeAI } = await import("@google/generative-ai");
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const modelInstance = genAI.getGenerativeModel({ model: model || "gemini-pro" });
+
+        const result = await modelInstance.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        // Try to parse as JSON if possible
+        let parsedText = text;
+        try {
+          parsedText = JSON.parse(text);
+        } catch {
+          // Not JSON, return as string
+        }
+
+        return {
+          provider: "google",
+          model: model || "gemini-pro",
+          response: parsedText,
+          rawResponse: text
+        };
+      } catch (importError) {
+        if (importError.message.includes("Cannot find module") || importError.code === "MODULE_NOT_FOUND") {
+          throw new Error("Google Generative AI package not installed. Run: npm install @google/generative-ai");
+        }
+        throw importError;
+      }
+    } else {
+      throw new Error(`Unsupported AI provider: ${provider}. Supported: openai, google`);
+    }
+  } catch (error) {
+    throw new Error(`AI Logic task failed: ${error.message}`);
+  }
+}
+
+/**
+ * PDF Generator Task Executor
+ * Converts HTML/Text to PDF using Puppeteer
+ */
+export async function executePdfGenTask(task) {
+  const { html, text, outputPath, format = "A4", margin = {}, landscape = false } = task.config || {};
+
+  if (!html && !text) {
+    throw new Error("PDF Generator task requires 'html' or 'text' in config");
+  }
+
+  try {
+    const puppeteer = (await import("puppeteer")).default;
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    try {
+      const page = await browser.newPage();
+      
+      // Use HTML if provided, otherwise convert text to HTML
+      const content = html || `<html><body><pre style="font-family: Arial, sans-serif; padding: 20px;">${text}</pre></body></html>`;
+      
+      await page.setContent(content, { waitUntil: 'networkidle0' });
+
+      const pdfOptions = {
+        format: format,
+        landscape: landscape,
+        margin: {
+          top: margin.top || "1cm",
+          right: margin.right || "1cm",
+          bottom: margin.bottom || "1cm",
+          left: margin.left || "1cm"
+        },
+        printBackground: true
+      };
+
+      // Generate output path if not provided
+      const finalOutputPath = outputPath || path.join(process.cwd(), "tmp", `pdf-${Date.now()}.pdf`);
+      await fs.mkdir(path.dirname(finalOutputPath), { recursive: true });
+
+      const pdfBuffer = await page.pdf(pdfOptions);
+      await fs.writeFile(finalOutputPath, pdfBuffer);
+
+      return {
+        success: true,
+        outputPath: finalOutputPath,
+        size: pdfBuffer.length,
+        format: format,
+        message: `PDF generated successfully at ${finalOutputPath}`
+      };
+    } finally {
+      await browser.close();
+    }
+  } catch (error) {
+    throw new Error(`PDF generation failed: ${error.message}`);
+  }
+}
+
+/**
+ * JSON Parser/Filter Task Executor
+ * Extracts data from JSON using key paths (e.g., results[0].id)
+ */
+export async function executeJsonFilterTask(task) {
+  const { jsonData, keyPath, defaultValue = null } = task.config || {};
+
+  if (!jsonData && !keyPath) {
+    throw new Error("JSON Filter task requires 'jsonData' and 'keyPath' in config");
+  }
+
+  try {
+    // Parse JSON if it's a string
+    let data = jsonData;
+    if (typeof jsonData === "string") {
+      try {
+        data = JSON.parse(jsonData);
+      } catch {
+        throw new Error("Invalid JSON string in jsonData");
+      }
+    }
+
+    // Navigate through the key path
+    const keys = keyPath.split(/[\.\[\]]/).filter(k => k !== "");
+    let result = data;
+
+    for (const key of keys) {
+      if (result === null || result === undefined) {
+        return { value: defaultValue, keyPath, found: false };
+      }
+
+      // Handle array indices
+      if (/^\d+$/.test(key)) {
+        const index = parseInt(key, 10);
+        if (Array.isArray(result) && index >= 0 && index < result.length) {
+          result = result[index];
+        } else {
+          return { value: defaultValue, keyPath, found: false };
+        }
+      } else {
+        // Handle object keys
+        if (typeof result === "object" && key in result) {
+          result = result[key];
+        } else {
+          return { value: defaultValue, keyPath, found: false };
+        }
+      }
+    }
+
+    return {
+      value: result,
+      keyPath,
+      found: true,
+      type: typeof result
+    };
+  } catch (error) {
+    throw new Error(`JSON Filter task failed: ${error.message}`);
+  }
+}
+
+/**
+ * Image Processor Task Executor
+ * Resizes, compresses, and converts images using Sharp
+ */
+export async function executeImageProcTask(task) {
+  const { inputPath, outputPath, width, height, format, quality = 80, fit = "cover" } = task.config || {};
+
+  if (!inputPath) {
+    throw new Error("Image Processor task requires 'inputPath' in config");
+  }
+
+  try {
+    const sharp = (await import("sharp")).default;
+    
+    // Resolve input path
+    const fullInputPath = path.isAbsolute(inputPath) 
+      ? inputPath 
+      : path.join(process.cwd(), inputPath);
+
+    // Check if file exists
+    await fs.access(fullInputPath);
+
+    // Generate output path if not provided
+    const fullOutputPath = outputPath 
+      ? (path.isAbsolute(outputPath) ? outputPath : path.join(process.cwd(), outputPath))
+      : path.join(process.cwd(), "tmp", `image-${Date.now()}.${format || "jpg"}`);
+
+    await fs.mkdir(path.dirname(fullOutputPath), { recursive: true });
+
+    let image = sharp(fullInputPath);
+
+    // Resize if dimensions provided
+    if (width || height) {
+      image = image.resize(width || null, height || null, {
+        fit: fit, // cover, contain, fill, inside, outside
+        withoutEnlargement: true
+      });
+    }
+
+    // Convert format and apply quality
+    if (format) {
+      const formatOptions = {};
+      if (quality && ["jpeg", "jpg", "webp", "avif"].includes(format.toLowerCase())) {
+        formatOptions.quality = quality;
+      }
+      image = image.toFormat(format.toLowerCase(), formatOptions);
+    } else {
+      // Apply quality to original format if supported
+      const metadata = await image.metadata();
+      if (["jpeg", "jpg", "webp", "avif"].includes(metadata.format)) {
+        image = image.jpeg({ quality: quality });
+      }
+    }
+
+    await image.toFile(fullOutputPath);
+    const stats = await fs.stat(fullOutputPath);
+
+    return {
+      success: true,
+      inputPath: fullInputPath,
+      outputPath: fullOutputPath,
+      size: stats.size,
+      format: format || (await sharp(fullOutputPath).metadata()).format,
+      width: width || null,
+      height: height || null,
+      message: `Image processed successfully`
+    };
+  } catch (error) {
+    throw new Error(`Image processing failed: ${error.message}`);
+  }
+}
+
+/**
+ * HTML to Markdown Transformer Task Executor
+ * Converts HTML to clean markdown text using node-html-markdown
+ */
+export async function executeHtmlToMdTask(task) {
+  const { html, outputPath } = task.config || {};
+
+  if (!html) {
+    throw new Error("HTML to Markdown task requires 'html' in config");
+  }
+
+  try {
+    const { NodeHtmlMarkdown } = (await import("node-html-markdown"));
+    const converter = new NodeHtmlMarkdown();
+
+    const markdown = converter.translate(html);
+
+    // Save to file if outputPath provided
+    if (outputPath) {
+      const fullOutputPath = path.isAbsolute(outputPath) 
+        ? outputPath 
+        : path.join(process.cwd(), outputPath);
+      
+      await fs.mkdir(path.dirname(fullOutputPath), { recursive: true });
+      await fs.writeFile(fullOutputPath, markdown, "utf8");
+
+      return {
+        success: true,
+        markdown: markdown,
+        outputPath: fullOutputPath,
+        length: markdown.length,
+        message: `Markdown saved to ${fullOutputPath}`
+      };
+    }
+
+    return {
+      success: true,
+      markdown: markdown,
+      length: markdown.length,
+      message: "HTML converted to markdown successfully"
+    };
+  } catch (error) {
+    throw new Error(`HTML to Markdown conversion failed: ${error.message}`);
+  }
+}
+

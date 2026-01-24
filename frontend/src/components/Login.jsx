@@ -106,25 +106,44 @@ export default function Login() {
   };
 
   return (
-    <div className="section-padding" style={{
-      minHeight: "100vh",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      background: "linear-gradient(15deg, #13547a 0%, #80d0c7 100%)"
-    }}>
-      <div className="container" style={{ maxWidth: "500px" }}>
-        <div className="card" style={{ padding: "3rem" }}>
+    <div
+      className="section-padding"
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background:
+          "radial-gradient(circle at 0% 0%, rgba(37,99,235,0.35), transparent 60%), radial-gradient(circle at 100% 100%, rgba(14,165,233,0.25), transparent 60%), #020617",
+        padding: "4rem 1.5rem",
+      }}
+    >
+      <div className="container" style={{ maxWidth: "520px", width: "100%" }}>
+        <div
+          className="card"
+          style={{
+            padding: "2.5rem",
+            borderRadius: "20px",
+            background: "rgba(15,23,42,0.9)",
+            boxShadow:
+              "0 45px 85px rgba(2,6,23,0.95), 0 0 0 1px rgba(37,99,235,0.25)",
+            backdropFilter: "blur(18px)",
+            border: "1px solid rgba(51,65,85,0.8)",
+          }}
+        >
           {/* Header */}
           <div style={{ textAlign: "center", marginBottom: "2rem" }}>
-            <h1 style={{ 
-              color: "var(--primary-color)", 
-              marginBottom: "0.5rem",
-              fontSize: "var(--h3-font-size)"
-            }}>
+            <h1
+              style={{
+                color: "#e5e7eb",
+                marginBottom: "0.5rem",
+                fontSize: "28px",
+                letterSpacing: "0.04em",
+              }}
+            >
               {isLogin ? "Login" : "Create Account"}
             </h1>
-            <p style={{ color: "var(--p-color)", fontSize: "var(--p-font-size)" }}>
+            <p style={{ color: "#9ca3af", fontSize: "14px" }}>
               {isLogin 
                 ? "Sign in to access your Task Scheduler" 
                 : "Register to start scheduling tasks"}
@@ -133,16 +152,19 @@ export default function Login() {
 
           {/* Error Message */}
           {error && (
-            <div className="alert alert-danger" style={{
-              backgroundColor: "#ffebee",
-              color: "#c62828",
-              padding: "1rem",
-              borderRadius: "var(--border-radius-small)",
-              marginBottom: "1.5rem",
-              fontSize: "14px",
-              border: "1px solid #ffcdd2"
-            }}>
-              <strong>Error:</strong> {error}
+            <div
+              className="alert alert-danger"
+              style={{
+                background: "rgba(127,29,29,0.2)",
+                color: "#fecaca",
+                padding: "0.9rem 1rem",
+                borderRadius: "12px",
+                marginBottom: "1.5rem",
+                fontSize: "13px",
+                border: "1px solid rgba(248,113,113,0.6)",
+              }}
+            >
+              <strong style={{ color: "#fecaca" }}>Error:</strong> {error}
             </div>
           )}
 
@@ -150,13 +172,18 @@ export default function Login() {
           <form onSubmit={handleSubmit} className="custom-form">
             {/* Full Name (Registration only) */}
             {!isLogin && (
-              <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-                <label htmlFor="name" style={{ 
-                  display: "block", 
-                  marginBottom: "0.5rem", 
-                  color: "var(--primary-color)", 
-                  fontWeight: "var(--font-weight-semibold)" 
-                }}>
+              <div className="form-group" style={{ marginBottom: "1.25rem" }}>
+                <label
+                  htmlFor="name"
+                  style={{
+                    display: "block",
+                    marginBottom: "0.4rem",
+                    color: "#e5e7eb",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    letterSpacing: "0.04em",
+                  }}
+                >
                   Full Name *
                 </label>
                 <input
@@ -174,13 +201,18 @@ export default function Login() {
 
             {/* Email (Registration only) */}
             {!isLogin && (
-              <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-                <label htmlFor="email" style={{ 
-                  display: "block", 
-                  marginBottom: "0.5rem", 
-                  color: "var(--primary-color)", 
-                  fontWeight: "var(--font-weight-semibold)" 
-                }}>
+              <div className="form-group" style={{ marginBottom: "1.25rem" }}>
+                <label
+                  htmlFor="email"
+                  style={{
+                    display: "block",
+                    marginBottom: "0.4rem",
+                    color: "#e5e7eb",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    letterSpacing: "0.04em",
+                  }}
+                >
                   Email *
                 </label>
                 <input
@@ -198,13 +230,18 @@ export default function Login() {
 
             {/* Email (Login) / Username (Register) */}
             {isLogin ? (
-              <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-                <label htmlFor="email" style={{ 
-                  display: "block", 
-                  marginBottom: "0.5rem", 
-                  color: "var(--primary-color)", 
-                  fontWeight: "var(--font-weight-semibold)" 
-                }}>
+              <div className="form-group" style={{ marginBottom: "1.25rem" }}>
+                <label
+                  htmlFor="email"
+                  style={{
+                    display: "block",
+                    marginBottom: "0.4rem",
+                    color: "#e5e7eb",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    letterSpacing: "0.04em",
+                  }}
+                >
                   Email *
                 </label>
                 <input
@@ -219,13 +256,18 @@ export default function Login() {
                 />
               </div>
             ) : (
-              <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-                <label htmlFor="username" style={{ 
-                  display: "block", 
-                  marginBottom: "0.5rem", 
-                  color: "var(--primary-color)", 
-                  fontWeight: "var(--font-weight-semibold)" 
-                }}>
+              <div className="form-group" style={{ marginBottom: "1.25rem" }}>
+                <label
+                  htmlFor="username"
+                  style={{
+                    display: "block",
+                    marginBottom: "0.4rem",
+                    color: "#e5e7eb",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    letterSpacing: "0.04em",
+                  }}
+                >
                   Username *
                 </label>
                 <input
@@ -242,13 +284,18 @@ export default function Login() {
             )}
 
             {/* Password */}
-            <div className="form-group" style={{ marginBottom: "2rem" }}>
-              <label htmlFor="password" style={{ 
-                display: "block", 
-                marginBottom: "0.5rem", 
-                color: "var(--primary-color)", 
-                fontWeight: "var(--font-weight-semibold)" 
-              }}>
+            <div className="form-group" style={{ marginBottom: "1.75rem" }}>
+              <label
+                htmlFor="password"
+                style={{
+                  display: "block",
+                  marginBottom: "0.4rem",
+                  color: "#e5e7eb",
+                  fontWeight: 600,
+                  fontSize: "13px",
+                  letterSpacing: "0.04em",
+                }}
+              >
                 Password *
               </label>
               <input
@@ -268,10 +315,10 @@ export default function Login() {
               type="submit"
               disabled={loading}
               className="custom-btn"
-              style={{ 
-                width: "100%", 
+              style={{
+                width: "100%",
                 padding: "12px 24px",
-                fontSize: "var(--btn-font-size)"
+                fontSize: "15px",
               }}
             >
               {loading ? "Please wait..." : isLogin ? "Login" : "Register"}
@@ -280,7 +327,7 @@ export default function Login() {
 
           {/* Toggle Login/Register */}
           <div style={{ marginTop: "2rem", textAlign: "center" }}>
-            <p style={{ color: "var(--p-color)", marginBottom: "0.5rem" }}>
+            <p style={{ color: "#94a3b8", marginBottom: "0.5rem" }}>
               {isLogin ? "Don't have an account?" : "Already have an account?"}
             </p>
             <button
@@ -288,13 +335,14 @@ export default function Login() {
               onClick={toggleMode}
               className="custom-border-btn"
               style={{
-                background: "transparent",
-                border: "none",
-                color: "var(--primary-color)",
+                background: "rgba(15,23,42,0.9)",
+                border: "1px solid rgba(59,130,246,0.5)",
+                color: "#bfdbfe",
                 cursor: "pointer",
-                textDecoration: "underline",
-                fontSize: "var(--menu-font-size)",
-                padding: "0.5rem"
+                fontSize: "13px",
+                padding: "0.45rem 1.25rem",
+                textDecoration: "none",
+                borderRadius: 999,
               }}
               disabled={loading}
             >

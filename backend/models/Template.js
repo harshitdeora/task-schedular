@@ -48,3 +48,15 @@ templateSchema.index({ isPublic: 1 });
 export default mongoose.model("Template", templateSchema);
 
 
+
+
+
+
+
+
+
+
+
+
+
+

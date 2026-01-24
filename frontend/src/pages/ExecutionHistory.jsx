@@ -1,8 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
-import { getExecutions, retryExecution, deleteExecution, deleteAllExecutions, forceCancelExecution } from "../api/executionApi";
+import io from "socket.io-client";
+import { getExecutions, retryExecution, resumeExecution, deleteExecution, deleteAllExecutions, forceCancelExecution } from "../api/executionApi";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from "recharts";
+
+const WORKER_SOCKET_URL = import.meta.env.VITE_WORKER_SOCKET_URL || "http://localhost:7000";
+const socket = io(WORKER_SOCKET_URL);
 
 const COLORS = ["#10b981", "#ef4444", "#3b82f6", "#f59e0b"];
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
@@ -20,6 +24,63 @@ export default function ExecutionHistory() {
     const interval = setInterval(checkAuthAndFetch, 15000);
     return () => clearInterval(interval);
   }, [filter]);
+
+  // Socket.io real-time updates
+  useEffect(() => {
+    socket.on("node:status", (data) => {
+      // Update execution when node status changes
+      setExecutions((prev) => {
+        return prev.map((exec) => {
+          if (exec._id === data.executionId) {
+            const updatedTasks = exec.tasks?.map((task) => {
+              if (task.nodeId === data.nodeId) {
+                return { ...task, status: data.status };
+              }
+              return task;
+            }) || [];
+            return { ...exec, tasks: updatedTasks };
+          }
+          return exec;
+        });
+      });
+    });
+
+    socket.on("task:update", (data) => {
+      // Also listen to task:update for compatibility
+      setExecutions((prev) => {
+        return prev.map((exec) => {
+          if (exec._id === data.executionId) {
+            const updatedTasks = exec.tasks?.map((task) => {
+              if (task.nodeId === data.taskId) {
+                return { ...task, status: data.status, output: data.output, error: data.error };
+              }
+              return task;
+            }) || [];
+            return { ...exec, tasks: updatedTasks };
+          }
+          return exec;
+        });
+      });
+    });
+
+    socket.on("execution:update", (data) => {
+      // Update execution status
+      setExecutions((prev) => {
+        return prev.map((exec) => {
+          if (exec._id === data._id) {
+            return { ...exec, status: data.status, timeline: data.timeline };
+          }
+          return exec;
+        });
+      });
+    });
+
+    return () => {
+      socket.off("node:status");
+      socket.off("task:update");
+      socket.off("execution:update");
+    };
+  }, []);
 
   const checkAuthAndFetch = async () => {
     try {
@@ -95,6 +156,16 @@ export default function ExecutionHistory() {
       fetchExecutions();
     } catch (error) {
       alert("Error retrying execution: " + error.message);
+    }
+  };
+
+  const handleResume = async (id) => {
+    try {
+      await resumeExecution(id);
+      alert("Execution resumed!");
+      fetchExecutions();
+    } catch (error) {
+      alert("Error resuming execution: " + error.message);
     }
   };
 
@@ -405,6 +476,15 @@ export default function ExecutionHistory() {
                                   Retry
                                 </button>
                               )}
+                              {exec.status === "paused" && (
+                                <button
+                                  onClick={() => handleResume(exec._id)}
+                                  className="custom-btn"
+                                  style={{ padding: "4px 12px", fontSize: "12px", background: "#10b981" }}
+                                >
+                                  ▶ Resume
+                                </button>
+                              )}
                               {(displayStatus === "success" || displayStatus === "failed" || displayStatus === "cancelled") && (
                                 <button
                                   onClick={() => handleDelete(exec._id)}
@@ -496,6 +576,55 @@ export default function ExecutionHistory() {
                                           }}>
                                             {typeof task.error === "string" ? task.error : JSON.stringify(task.error, null, 2)}
                                           </pre>
+                                        </div>
+                                      )}
+
+                                      {/* Visual Debugger: Input/Output Panel */}
+                                      {(task.input || task.output) && (
+                                        <div style={{ marginTop: "15px", borderTop: "1px solid #e5e7eb", paddingTop: "15px" }}>
+                                          <h5 style={{ marginBottom: "10px", color: "#13547a", fontSize: "14px", fontWeight: "600" }}>🔍 Visual Debugger</h5>
+                                          <div style={{ display: "grid", gridTemplateColumns: task.input && task.output ? "1fr 1fr" : "1fr", gap: "15px" }}>
+                                            {task.input && (
+                                              <div>
+                                                <strong style={{ color: "#059669", fontSize: "12px", display: "block", marginBottom: "8px" }}>📥 Input Data:</strong>
+                                                <pre style={{ 
+                                                  padding: "12px", 
+                                                  backgroundColor: "#f0fdf4", 
+                                                  borderRadius: "6px",
+                                                  border: "1px solid #bbf7d0",
+                                                  overflow: "auto",
+                                                  fontSize: "11px",
+                                                  maxHeight: "300px",
+                                                  fontFamily: "'Courier New', monospace",
+                                                  margin: 0
+                                                }}>
+                                                  {typeof task.input === "string" 
+                                                    ? task.input 
+                                                    : JSON.stringify(task.input, null, 2)}
+                                                </pre>
+                                              </div>
+                                            )}
+                                            {task.output && (
+                                              <div>
+                                                <strong style={{ color: "#0284c7", fontSize: "12px", display: "block", marginBottom: "8px" }}>📤 Output Result:</strong>
+                                                <pre style={{ 
+                                                  padding: "12px", 
+                                                  backgroundColor: "#f0f9ff", 
+                                                  borderRadius: "6px",
+                                                  border: "1px solid #bae6fd",
+                                                  overflow: "auto",
+                                                  fontSize: "11px",
+                                                  maxHeight: "300px",
+                                                  fontFamily: "'Courier New', monospace",
+                                                  margin: 0
+                                                }}>
+                                                  {typeof task.output === "string" 
+                                                    ? task.output 
+                                                    : JSON.stringify(task.output, null, 2)}
+                                                </pre>
+                                              </div>
+                                            )}
+                                          </div>
                                         </div>
                                       )}
 

@@ -352,3 +352,76 @@ export const deleteAllExecutions = async (req, res) => {
   }
 };
 
+export const resumeExecution = async (req, res) => {
+  try {
+    // Require authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, message: "Authentication required" });
+    }
+
+    const execution = await Execution.findOne({ _id: req.params.id, userId: req.user._id }).populate("dagId");
+    
+    if (!execution) {
+      return res.status(404).json({ success: false, message: "Execution not found" });
+    }
+
+    if (execution.status !== "paused") {
+      return res.status(400).json({ success: false, message: "Execution is not paused" });
+    }
+
+    const dag = execution.dagId;
+    if (!dag) {
+      return res.status(404).json({ success: false, message: "DAG not found" });
+    }
+
+    // Find the paused task
+    const pausedTask = execution.tasks.find(t => t.nodeId === execution.pausedTaskId && t.status === "paused");
+    if (!pausedTask) {
+      return res.status(400).json({ success: false, message: "Paused task not found" });
+    }
+
+    // Mark paused task as completed (success)
+    pausedTask.status = "success";
+    pausedTask.completedAt = new Date();
+    pausedTask.output = { message: "Resumed by user", resumedAt: new Date() };
+
+    // Update execution status
+    execution.status = "running";
+    execution.pausedAt = null;
+    execution.pausedTaskId = null;
+
+    await execution.save();
+
+    // Enqueue dependent tasks from the paused task
+    const edges = dag.graph.edges || [];
+    const nodes = dag.graph.nodes || [];
+    
+    const dependentTaskIds = edges
+      .filter(e => e.source === execution.pausedTaskId && (e.type === "success" || !e.type || e.type === "success"))
+      .map(e => e.target);
+
+    for (const dependentTaskId of dependentTaskIds) {
+      const dependentNode = nodes.find(n => n.id === dependentTaskId);
+      if (dependentNode) {
+        // Check if this task hasn't already been executed
+        const alreadyExecuted = execution.tasks.some(t => t.nodeId === dependentTaskId);
+        if (!alreadyExecuted) {
+          await redis.lpush(
+            "queue:tasks",
+            JSON.stringify({
+              executionId: execution._id.toString(),
+              dagId: dag._id.toString(),
+              task: dependentNode,
+              userId: req.user._id.toString()
+            })
+          );
+        }
+      }
+    }
+
+    res.json({ success: true, execution });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+};
+

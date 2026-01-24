@@ -192,12 +192,32 @@ const executeTask = async (payload) => {
 
   // Emit started
   io.emit("task:update", { executionId, taskId: task.id, status: "started", name: task.name, attempt, timestamp: new Date() });
+  io.emit("node:status", { executionId, nodeId: task.id, status: "running", timestamp: new Date() });
+
+  // Store input data for debugging (get from previous task outputs or execution context)
+  let inputData = null;
+  if (execDoc && execDoc.tasks && execDoc.tasks.length > 0) {
+    const completedTasks = execDoc.tasks
+      .filter(t => t.status === "success" || t.status === "failed")
+      .sort((a, b) => (b.completedAt || b.startedAt || 0) - (a.completedAt || a.startedAt || 0));
+    
+    if (completedTasks.length > 0) {
+      inputData = completedTasks[0].output || null;
+    }
+  }
 
   // Append running record (best-effort)
   try {
     if (execDoc) {
       const taskStartTime = new Date();
-      execDoc.tasks.push({ nodeId: task.id, name: task.name, status: "running", attempts: attempt, startedAt: taskStartTime });
+      execDoc.tasks.push({ 
+        nodeId: task.id, 
+        name: task.name, 
+        status: "running", 
+        attempts: attempt, 
+        startedAt: taskStartTime,
+        input: inputData // Store input for debugging
+      });
       
       // Ensure execution timeline.startedAt is set when first task starts
       if (!execDoc.timeline) execDoc.timeline = {};
@@ -250,8 +270,25 @@ const executeTask = async (payload) => {
               startedAt: new Date(), 
               // Don't set completedAt for scheduled tasks
               error: null, 
-              output: info.message || null
+              output: info.message || null,
+              input: inputData
             });
+          } else if (status === "paused") {
+            execDoc.tasks.push({
+              nodeId: task.id, 
+              name: task.name, 
+              status: "paused", 
+              attempts: attempt, 
+              startedAt: new Date(), 
+              // Don't set completedAt for paused tasks
+              error: null, 
+              output: info.message || null,
+              input: inputData
+            });
+            // Mark execution as paused
+            execDoc.status = "paused";
+            execDoc.pausedAt = new Date();
+            execDoc.pausedTaskId = task.id;
           } else {
             execDoc.tasks.push({
               nodeId: task.id, 
@@ -261,7 +298,8 @@ const executeTask = async (payload) => {
               startedAt: new Date(), 
               completedAt: new Date(), 
               error: info.error ?? null, 
-              output: info.output ?? null
+              output: info.output ?? null,
+              input: inputData
             });
           }
         }
@@ -272,7 +310,12 @@ const executeTask = async (payload) => {
         // If task completed successfully (not scheduled), check for dependent tasks to enqueue
         // Scheduled tasks will trigger dependent tasks when they actually complete (when email is sent)
         if (status === "success" && !isScheduled && dagDoc && dagDoc.graph) {
-          await enqueueDependentTasks(task.id, execDoc, dagDoc);
+          await enqueueDependentTasks(task.id, execDoc, dagDoc, "success");
+        }
+        
+        // If task failed, check for failure path
+        if (status === "failed" && dagDoc && dagDoc.graph) {
+          await handleFailurePath(task.id, execDoc, dagDoc);
         }
         
         // Refetch execution from DB to get latest state (important for concurrent tasks)
@@ -297,6 +340,7 @@ const executeTask = async (payload) => {
       // Emit task update with correct status (use "scheduled" if task is scheduled, otherwise use the status)
       const emitStatus = isScheduled ? "scheduled" : status;
       io.emit("task:update", { executionId, taskId: task.id, status: emitStatus, name: task.name, attempt, timestamp: new Date(), ...info });
+      io.emit("node:status", { executionId, nodeId: task.id, status: emitStatus, timestamp: new Date() });
     } catch (err) {
       console.error("Finalize error:", err);
       // Still decrement task count even on error
@@ -304,8 +348,61 @@ const executeTask = async (payload) => {
     }
   };
 
+  // Helper function to handle failure paths
+  const handleFailurePath = async (failedTaskId, execDoc, dagDoc) => {
+    try {
+      if (!dagDoc || !dagDoc.graph || !dagDoc.graph.edges) {
+        return false;
+      }
+
+      const edges = dagDoc.graph.edges;
+      const nodes = dagDoc.graph.nodes || [];
+      
+      // Find failure edges from the failed task
+      const failureEdges = edges.filter(
+        e => e.source === failedTaskId && 
+        (e.type === "failure" || e.sourceHandle === "failure")
+      );
+
+      if (failureEdges.length === 0) {
+        return false; // No failure path configured
+      }
+
+      // Get userId from execution document
+      const executionUserId = execDoc.userId ? execDoc.userId.toString() : null;
+
+      // Enqueue tasks on failure path
+      for (const failureEdge of failureEdges) {
+        const failureTaskId = failureEdge.target;
+        const failureNode = nodes.find(n => n.id === failureTaskId);
+        
+        if (failureNode) {
+          // Check if this task hasn't already been executed
+          const alreadyExecuted = execDoc.tasks.some(t => t.nodeId === failureTaskId);
+          if (!alreadyExecuted) {
+            await redis.lpush(
+              REDIS_QUEUE,
+              JSON.stringify({
+                executionId: execDoc._id.toString(),
+                dagId: dagDoc._id.toString(),
+                task: failureNode,
+                userId: executionUserId
+              })
+            );
+            console.log(`📤 Enqueued failure path task: ${failureNode.name || failureTaskId} (from failed task: ${failedTaskId})`);
+          }
+        }
+      }
+
+      return true; // Failure path was handled
+    } catch (err) {
+      console.error("Error handling failure path:", err);
+      return false;
+    }
+  };
+
   // Helper function to enqueue dependent tasks after a task completes
-  const enqueueDependentTasks = async (completedTaskId, execDoc, dagDoc) => {
+  const enqueueDependentTasks = async (completedTaskId, execDoc, dagDoc, taskStatus = "success") => {
     try {
       if (!dagDoc || !dagDoc.graph || !dagDoc.graph.edges) {
         return;
@@ -317,9 +414,18 @@ const executeTask = async (payload) => {
       // Get userId from execution document
       const executionUserId = execDoc.userId ? execDoc.userId.toString() : null;
       
-      // Find all tasks that depend on the completed task (edges where completed task is source)
+      // Find all tasks that depend on the completed task
+      // For success: edges with type="success" or sourceHandle="source" (default)
+      // For failure: edges with type="failure" or sourceHandle="failure"
+      const edgeType = taskStatus === "success" ? "success" : "failure";
       const dependentTaskIds = edges
-        .filter(e => e.source === completedTaskId)
+        .filter(e => {
+          if (e.source !== completedTaskId) return false;
+          // Match by type or sourceHandle
+          return (e.type === edgeType || 
+                  (edgeType === "success" && (!e.type || e.type === "success")) ||
+                  (edgeType === "failure" && e.sourceHandle === "failure"));
+        })
         .map(e => e.target);
 
       if (dependentTaskIds.length === 0) {
@@ -333,9 +439,11 @@ const executeTask = async (payload) => {
           .filter(e => e.target === dependentTaskId)
           .map(e => e.source);
 
-        // Check if all dependencies have completed successfully
+        // Check if all dependencies have completed with the required status
         const completedDependencies = execDoc.tasks.filter(
-          t => dependencies.includes(t.nodeId) && t.status === "success"
+          t => dependencies.includes(t.nodeId) && 
+          ((taskStatus === "success" && t.status === "success") ||
+           (taskStatus === "failed" && t.status === "failed"))
         );
 
         // If all dependencies are satisfied, enqueue this task
@@ -354,7 +462,7 @@ const executeTask = async (payload) => {
                   userId: executionUserId
                 })
               );
-              console.log(`📤 Enqueued dependent task: ${dependentNode.name || dependentTaskId} (depends on: ${completedTaskId})`);
+              console.log(`📤 Enqueued dependent task: ${dependentNode.name || dependentTaskId} (depends on: ${completedTaskId}, status: ${taskStatus})`);
             }
           }
         }
@@ -585,6 +693,41 @@ const executeTask = async (payload) => {
         result = await taskExecutors.executeConditionTask(taskToExecute);
         break;
 
+      case "ai_logic":
+      case "ai":
+        result = await taskExecutors.executeAiLogicTask({ ...taskToExecute, executionId });
+        break;
+
+      case "pdf_gen":
+      case "pdf":
+        result = await taskExecutors.executePdfGenTask(taskToExecute);
+        break;
+
+      case "json_filter":
+      case "json":
+        result = await taskExecutors.executeJsonFilterTask(taskToExecute);
+        break;
+
+      case "image_proc":
+      case "image":
+        result = await taskExecutors.executeImageProcTask(taskToExecute);
+        break;
+
+      case "html_to_md":
+      case "htmltomd":
+        result = await taskExecutors.executeHtmlToMdTask(taskToExecute);
+        break;
+
+      case "pause":
+      case "wait_for_signal":
+      case "approval":
+        // Pause task - save state and stop execution
+        await finalize("paused", { 
+          message: "Execution paused, waiting for resume signal",
+          pausedAt: new Date()
+        });
+        return; // Don't continue execution
+
       default:
         throw new Error(`Unsupported task type: ${taskToExecute?.type || task?.type || 'unknown'}`);
     }
@@ -615,16 +758,27 @@ const executeTask = async (payload) => {
     
     console.warn(`Task "${taskName}" attempt ${attempt} failed:`, errorMessage);
 
-    // Get retry config from DAG level, fallback to task level, then defaults
+    // Get retry config from task level, fallback to DAG level, then defaults
     let maxRetries = 3;
-    let retryDelayMs = 2000;
+    let initialDelayMs = 1000;
+    let maxDelayMs = 30000;
+    let multiplier = 2;
 
-    if (dagDoc && dagDoc.retryConfig) {
+    // Check task-level retryPolicy first
+    const taskNode = dagDoc?.graph?.nodes?.find(n => n.id === task.id);
+    if (taskNode?.retryPolicy) {
+      maxRetries = taskNode.retryPolicy.maxRetries !== null && taskNode.retryPolicy.maxRetries !== undefined
+        ? Number(taskNode.retryPolicy.maxRetries)
+        : (dagDoc?.retryConfig?.maxRetries ?? 3);
+      initialDelayMs = Number(taskNode.retryPolicy.initialDelay ?? 1000);
+      maxDelayMs = Number(taskNode.retryPolicy.maxDelay ?? 30000);
+      multiplier = Number(taskNode.retryPolicy.multiplier ?? 2);
+    } else if (dagDoc && dagDoc.retryConfig) {
       maxRetries = Number(dagDoc.retryConfig.maxRetries ?? 3);
-      retryDelayMs = Number(dagDoc.retryConfig.retryDelay ?? 2000);
+      initialDelayMs = Number(dagDoc.retryConfig.retryDelay ?? 2000);
     }
     
-    // Check task-level retry config (supports both retries and retryCount for HTTP tasks)
+    // Check task config for backward compatibility (supports both retries and retryCount for HTTP tasks)
     if (taskToExecute.config?.retries !== undefined) {
       maxRetries = Number(taskToExecute.config.retries);
     } else if (taskToExecute.config?.retryCount !== undefined) {
@@ -632,8 +786,14 @@ const executeTask = async (payload) => {
     }
     
     if (taskToExecute.config?.retryDelay !== undefined) {
-      retryDelayMs = Number(taskToExecute.config.retryDelay);
+      initialDelayMs = Number(taskToExecute.config.retryDelay);
     }
+
+    // Calculate exponential backoff delay
+    const retryDelayMs = Math.min(
+      initialDelayMs * Math.pow(multiplier, attempt - 1),
+      maxDelayMs
+    );
 
     if (attempt < maxRetries) {
       setTimeout(async () => {
@@ -641,7 +801,8 @@ const executeTask = async (payload) => {
         try {
           await redis.lpush(REDIS_QUEUE, JSON.stringify(requeue));
           io.emit("task:update", { executionId, taskId: task.id, status: "retry_scheduled", name: task.name, attempt: attempt + 1, retryInMs: retryDelayMs, timestamp: new Date() });
-          console.log(`🔄 Task "${task.name}" requeued for retry (attempt ${attempt + 1}/${maxRetries})`);
+          io.emit("node:status", { executionId, nodeId: task.id, status: "retrying", timestamp: new Date() });
+          console.log(`🔄 Task "${task.name}" requeued for retry (attempt ${attempt + 1}/${maxRetries}, delay: ${retryDelayMs}ms)`);
         } catch (pushErr) {
           console.error("Requeue failed:", pushErr);
           await moveToDeadLetter(requeue, "requeue_failed:" + String(pushErr));
@@ -653,7 +814,13 @@ const executeTask = async (payload) => {
       const errorInfo = errorData || { error: errorMessage };
       await finalize("retrying", errorInfo);
     } else {
-      await moveToDeadLetter(payload, "max_retries_exceeded:" + String(errorMessage));
+      // Max retries exceeded - check for failure path
+      const hasFailurePath = await handleFailurePath(task.id, execDoc, dagDoc);
+      
+      if (!hasFailurePath) {
+        await moveToDeadLetter(payload, "max_retries_exceeded:" + String(errorMessage));
+      }
+      
       // Include full error data for HTTP tasks (status code, response, etc.)
       const finalErrorInfo = errorData || { error: errorMessage };
       await finalize("failed", finalErrorInfo);
