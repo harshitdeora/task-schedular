@@ -378,9 +378,7 @@ export const resumeExecution = async (req, res) => {
     const pausedTask = execution.tasks.find(t => t.nodeId === execution.pausedTaskId && t.status === "paused");
     if (!pausedTask) {
       return res.status(400).json({ success: false, message: "Paused task not found" });
-    }
-
-    // Mark paused task as completed (success)
+    }    // Mark paused task as completed (success)
     pausedTask.status = "success";
     pausedTask.completedAt = new Date();
     pausedTask.output = { message: "Resumed by user", resumedAt: new Date() };
@@ -424,4 +422,3 @@ export const resumeExecution = async (req, res) => {
     res.status(400).json({ success: false, error: error.message });
   }
 };
-

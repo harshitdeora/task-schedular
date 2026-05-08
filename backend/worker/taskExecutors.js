@@ -965,9 +965,7 @@ export async function executeAiLogicTask(task) {
         parsedContent = JSON.parse(content);
       } catch {
         // Not JSON, return as string
-      }
-
-      return {
+      }      return {
         provider: "openai",
         model: model || "gpt-3.5-turbo",
         response: parsedContent,
@@ -1249,4 +1247,3 @@ export async function executeHtmlToMdTask(task) {
     throw new Error(`HTML to Markdown conversion failed: ${error.message}`);
   }
 }
-
